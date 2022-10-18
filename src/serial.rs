@@ -987,7 +987,7 @@ impl<USART: Instance> Rx<USART, u16> {
 }
 
 impl<USART: Instance> Tx<USART, u8> {
-    fn write(&mut self, word: u8) -> nb::Result<(), Error> {
+    pub fn write(&mut self, word: u8) -> nb::Result<(), Error> {
         // Delegate to u16 version
         Tx::<USART, u16>::new().write(u16::from(word))
     }
