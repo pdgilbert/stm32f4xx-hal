@@ -18,6 +18,11 @@ macro_rules! bus_enable {
                     bb::clear(Self::Bus::enr(rcc), $bit);
                 }
             }
+            #[inline(always)]
+            fn is_enabled() -> bool {
+                let rcc = pac::RCC::ptr();
+                (Self::Bus::enr(unsafe { &*rcc }).read().bits() >> $bit) & 0x1 != 0
+            }
         }
     };
 }
@@ -25,7 +30,7 @@ macro_rules! bus_lpenable {
     ($PER:ident => $bit:literal) => {
         impl LPEnable for crate::pac::$PER {
             #[inline(always)]
-            fn low_power_enable(rcc: &RccRB) {
+            fn enable_in_low_power(rcc: &RccRB) {
                 unsafe {
                     bb::set(Self::Bus::lpenr(rcc), $bit);
                 }
@@ -33,10 +38,15 @@ macro_rules! bus_lpenable {
                 cortex_m::asm::dsb();
             }
             #[inline(always)]
-            fn low_power_disable(rcc: &RccRB) {
+            fn disable_in_low_power(rcc: &RccRB) {
                 unsafe {
                     bb::clear(Self::Bus::lpenr(rcc), $bit);
                 }
+            }
+            #[inline(always)]
+            fn is_enabled_in_low_power() -> bool {
+                let rcc = pac::RCC::ptr();
+                (Self::Bus::lpenr(unsafe { &*rcc }).read().bits() >> $bit) & 0x1 != 0
             }
         }
     };
@@ -68,6 +78,18 @@ macro_rules! bus {
         )+
     }
 }
+
+#[cfg(feature = "quadspi")]
+impl crate::Sealed for crate::pac::QUADSPI {}
+#[cfg(feature = "quadspi")]
+impl RccBus for crate::pac::QUADSPI {
+    type Bus = AHB3;
+}
+
+#[cfg(feature = "quadspi")]
+bus_enable! { QUADSPI => 1 }
+#[cfg(feature = "quadspi")]
+bus_reset! { QUADSPI => 1 }
 
 bus! {
     CRC => (AHB1, 12),
@@ -254,6 +276,21 @@ bus_lpenable!(ADC3 => 10);
 #[cfg(feature = "adc3")]
 bus_reset!(ADC3 => 8);
 
+#[cfg(feature = "stm32f413")]
+bus! {
+    SAI => (APB2, 22),
+}
+
+#[cfg(any(feature = "stm32f427", feature = "stm32f437", feature = "stm32f446"))]
+bus! {
+    SAI1 => (APB2, 22),
+}
+
+#[cfg(feature = "sai2")]
+bus! {
+    SAI2 => (APB2, 23),
+}
+
 #[cfg(feature = "sdio")]
 bus! {
     SDIO => (APB2, 11),
@@ -267,22 +304,14 @@ bus! {
 }
 
 #[cfg(any(
-    feature = "stm32f401",
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
+    feature = "gpio-f401",
+    feature = "gpio-f417",
+    feature = "gpio-f411",
+    feature = "gpio-f412",
+    feature = "gpio-f413",
+    feature = "gpio-f427",
+    feature = "gpio-f446",
+    feature = "gpio-f469",
 ))]
 bus! {
     TIM2 => (APB1, 0),
@@ -292,41 +321,25 @@ bus! {
 }
 
 #[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f410",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
+    feature = "gpio-f410",
+    feature = "gpio-f412",
+    feature = "gpio-f413",
+    feature = "gpio-f417",
+    feature = "gpio-f427",
+    feature = "gpio-f446",
+    feature = "gpio-f469",
 ))]
 bus! {
     TIM6 => (APB1, 4),
 }
 
 #[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
+    feature = "gpio-f412",
+    feature = "gpio-f413",
+    feature = "gpio-f417",
+    feature = "gpio-f427",
+    feature = "gpio-f446",
+    feature = "gpio-f469",
 ))]
 bus! {
     TIM7 => (APB1, 5),
@@ -334,4 +347,13 @@ bus! {
     TIM12 => (APB1, 6),
     TIM13 => (APB1, 7),
     TIM14 => (APB1, 8),
+}
+
+#[cfg(feature = "ltdc")]
+bus! {
+    LTDC => (APB2, 26),
+}
+#[cfg(feature = "dma2d")]
+bus! {
+    DMA2D => (AHB1, 23),
 }

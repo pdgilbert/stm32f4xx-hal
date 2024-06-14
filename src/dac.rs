@@ -6,7 +6,7 @@
 
 use crate::{
     gpio::{Analog, PA4, PA5},
-    pac::{DAC, RCC},
+    pac::DAC,
     rcc::{Enable, Reset},
 };
 
@@ -54,12 +54,9 @@ where
     PINS: Pins<DAC>,
 {
     unsafe {
-        // NOTE(unsafe) this reference will only be used for atomic writes with no side effects.
-        let rcc = &(*RCC::ptr());
-
         // Enable and reset clock.
-        DAC::enable(rcc);
-        DAC::reset(rcc);
+        DAC::enable_unchecked();
+        DAC::reset_unchecked();
 
         PINS::init()
     }
@@ -70,19 +67,19 @@ macro_rules! dac {
         impl DacPin for $CX {
             fn enable(&mut self) {
                 let dac = unsafe { &(*DAC::ptr()) };
-                dac.cr.modify(|_, w| w.$en().set_bit());
+                dac.cr().modify(|_, w| w.$en().set_bit());
             }
         }
 
         impl DacOut<u16> for $CX {
             fn set_value(&mut self, val: u16) {
                 let dac = unsafe { &(*DAC::ptr()) };
-                dac.$dhrx.write(|w| unsafe { w.bits(val as u32) });
+                dac.$dhrx().write(|w| unsafe { w.bits(val as u32) });
             }
 
             fn get_value(&mut self) -> u16 {
                 let dac = unsafe { &(*DAC::ptr()) };
-                dac.$dac_dor.read().bits() as u16
+                dac.$dac_dor().read().bits() as u16
             }
         }
     };
@@ -104,4 +101,5 @@ impl DacExt for DAC {
 }
 
 dac!(C1, en1, cen1, cal_flag1, otrim1, mode1, dhr12r1, dor1, dacc1dhr);
+#[cfg(not(feature = "stm32f410"))]
 dac!(C2, en2, cen2, cal_flag2, otrim2, mode2, dhr12r2, dor2, dacc2dhr);

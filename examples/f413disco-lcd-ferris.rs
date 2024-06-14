@@ -11,25 +11,25 @@
 #![no_std]
 
 use panic_halt as _;
-use rtt_target::{self, rtt_init_print};
+use rtt_target::{self, rtt_init_print, ChannelMode};
 
 use stm32f4xx_hal as hal;
 
 use crate::hal::{
-    fsmc_lcd::{ChipSelect3, FsmcLcd, LcdPins, Timing},
+    fsmc_lcd::{DataPins16, FsmcLcd, LcdPins, Timing},
     gpio::Speed,
     pac::{CorePeripherals, Peripherals},
     prelude::*,
 };
 
-use embedded_graphics::geometry::Size;
-use embedded_graphics::image::*;
-use embedded_graphics::pixelcolor::Rgb565;
-use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::*;
+use embedded_graphics_07::geometry::Size;
+use embedded_graphics_07::image::*;
+use embedded_graphics_07::pixelcolor::Rgb565;
+use embedded_graphics_07::prelude::*;
+use embedded_graphics_07::primitives::*;
 use st7789::*;
 
-pub use display_interface::{DisplayError, WriteOnlyDataCommand};
+pub use display_interface_04::{DisplayError, WriteOnlyDataCommand};
 
 /// Define the lovely ferris crab sprite
 const FERRIS: [u8; 11008] = [
@@ -694,7 +694,7 @@ const FERRIS: [u8; 11008] = [
 #[cortex_m_rt::entry]
 fn main() -> ! {
     // Initialise RTT so you can see panics and other output in your `probe-run` output
-    rtt_init_print!(NoBlockTrim);
+    rtt_init_print!(ChannelMode::NoBlockTrim);
 
     if let (Some(p), Some(cp)) = (Peripherals::take(), CorePeripherals::take()) {
         // Split all the GPIO blocks we need
@@ -709,30 +709,18 @@ fn main() -> ! {
         let clocks = rcc.cfgr.sysclk(100.MHz()).freeze();
 
         // Define the pins we need for our 16bit parallel bus
-        let lcd_pins = LcdPins {
-            data: (
-                gpiod.pd14.into_alternate(),
-                gpiod.pd15.into_alternate(),
-                gpiod.pd0.into_alternate(),
-                gpiod.pd1.into_alternate(),
-                gpioe.pe7.into_alternate(),
-                gpioe.pe8.into_alternate(),
-                gpioe.pe9.into_alternate(),
-                gpioe.pe10.into_alternate(),
-                gpioe.pe11.into_alternate(),
-                gpioe.pe12.into_alternate(),
-                gpioe.pe13.into_alternate(),
-                gpioe.pe14.into_alternate(),
-                gpioe.pe15.into_alternate(),
-                gpiod.pd8.into_alternate(),
-                gpiod.pd9.into_alternate(),
-                gpiod.pd10.into_alternate(),
+        use stm32f4xx_hal::gpio::alt::fsmc as alt;
+        let lcd_pins = LcdPins::new(
+            DataPins16::new(
+                gpiod.pd14, gpiod.pd15, gpiod.pd0, gpiod.pd1, gpioe.pe7, gpioe.pe8, gpioe.pe9,
+                gpioe.pe10, gpioe.pe11, gpioe.pe12, gpioe.pe13, gpioe.pe14, gpioe.pe15, gpiod.pd8,
+                gpiod.pd9, gpiod.pd10,
             ),
-            address: gpiof.pf0.into_alternate(),
-            read_enable: gpiod.pd4.into_alternate(),
-            write_enable: gpiod.pd5.into_alternate(),
-            chip_select: ChipSelect3(gpiog.pg10.into_alternate()),
-        };
+            alt::Address::from(gpiof.pf0),
+            gpiod.pd4,
+            gpiod.pd5,
+            alt::ChipSelect3::from(gpiog.pg10),
+        );
 
         // Setup the RESET pin
         let rst = gpiob.pb13.into_push_pull_output().speed(Speed::VeryHigh);

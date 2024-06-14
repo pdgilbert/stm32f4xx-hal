@@ -1,827 +1,431 @@
-use super::{marker, Alternate, NoPin, OpenDrain, Pin, PinMode, PushPull};
-use crate::{gpio, i2c, i2s, pac, serial, spi};
+mod f4;
+pub use f4::*;
 
-pub struct Const<const A: u8>;
+macro_rules! extipin {
+    ($( $(#[$attr:meta])* $PX:ident,)*) => {
+        fn make_interrupt_source(&mut self, _syscfg: &mut $crate::syscfg::SysCfg) {
+            match self {
+                $(
+                    $(#[$attr])*
+                    Self::$PX(p) => p.make_interrupt_source(_syscfg),
+                )*
+                _ => {},
+            }
 
-pub trait SetAlternate<const A: u8, Otype> {
-    fn set_alt_mode(&mut self);
-    fn restore_mode(&mut self);
+        }
+
+        fn trigger_on_edge(&mut self, _exti: &mut $crate::pac::EXTI, _level: $crate::gpio::Edge) {
+            match self {
+                $(
+                    $(#[$attr])*
+                    Self::$PX(p) => p.trigger_on_edge(_exti, _level),
+                )*
+                _ => {},
+            }
+        }
+
+        fn enable_interrupt(&mut self, _exti: &mut $crate::pac::EXTI) {
+            match self {
+                $(
+                    $(#[$attr])*
+                    Self::$PX(p) => p.enable_interrupt(_exti),
+                )*
+                _ => {},
+            }
+        }
+        fn disable_interrupt(&mut self, _exti: &mut $crate::pac::EXTI) {
+            match self {
+                $(
+                    $(#[$attr])*
+                    Self::$PX(p) => p.disable_interrupt(_exti),
+                )*
+                _ => {},
+            }
+        }
+        fn clear_interrupt_pending_bit(&mut self) {
+            match self {
+                $(
+                    $(#[$attr])*
+                    Self::$PX(p) => p.clear_interrupt_pending_bit(),
+                )*
+                _ => {},
+            }
+        }
+        fn check_interrupt(&self) -> bool {
+            match self {
+                $(
+                    $(#[$attr])*
+                    Self::$PX(p) => p.check_interrupt(),
+                )*
+                _ => false,
+            }
+        }
+    };
 }
-impl<Otype> SetAlternate<0, Otype> for NoPin {
-    fn set_alt_mode(&mut self) {}
-    fn restore_mode(&mut self) {}
-}
-impl<const P: char, const N: u8, MODE: PinMode + marker::NotAlt, const A: u8>
-    SetAlternate<A, PushPull> for Pin<P, N, MODE>
-{
-    fn set_alt_mode(&mut self) {
-        self.mode::<Alternate<A, PushPull>>();
-    }
-
-    fn restore_mode(&mut self) {
-        self.mode::<MODE>();
-    }
-}
-
-impl<const P: char, const N: u8, MODE: PinMode + marker::NotAlt, const A: u8>
-    SetAlternate<A, OpenDrain> for Pin<P, N, MODE>
-{
-    fn set_alt_mode(&mut self) {
-        self.mode::<Alternate<A, OpenDrain>>();
-    }
-
-    fn restore_mode(&mut self) {
-        self.mode::<MODE>();
-    }
-}
-
-impl<const P: char, const N: u8, const A: u8> SetAlternate<A, PushPull>
-    for Pin<P, N, Alternate<A, PushPull>>
-{
-    fn set_alt_mode(&mut self) {}
-    fn restore_mode(&mut self) {}
-}
-
-impl<const P: char, const N: u8, const A: u8> SetAlternate<A, OpenDrain>
-    for Pin<P, N, Alternate<A, OpenDrain>>
-{
-    fn set_alt_mode(&mut self) {}
-    fn restore_mode(&mut self) {}
-}
-
-pub trait PinA<PIN, PER> {
-    type A;
-}
-
-impl<PIN, PER> PinA<PIN, PER> for NoPin
-where
-    PIN: crate::Sealed,
-    PER: crate::Sealed,
-{
-    type A = Const<0>;
-}
+use extipin;
 
 macro_rules! pin {
-    ( $(<$Pin:ty, $I2C:ident> for [$($PX:ident<$A:literal>),*]),*) => {
+    ( $($(#[$docs:meta])* <$name:ident, $Otype:ident> for $(no: $NoPin:ident,)? [$(
+        $(#[$attr:meta])* $PX:ident<$A:literal $(, Speed::$Speed:ident)?>,
+    )*],)*) => {
         $(
+            #[derive(Debug)]
+            $(#[$docs])*
+            pub enum $name {
+                $(
+                    None($NoPin<$Otype>),
+                )?
+
+                $(
+                    $(#[$attr])*
+                    $PX(gpio::$PX<$crate::gpio::Alternate<$A, $Otype>>),
+                )*
+            }
+
+            impl crate::Sealed for $name { }
+
+            #[allow(unreachable_patterns)]
+            impl $crate::gpio::ReadPin for $name {
+                fn is_low(&self) -> bool {
+                    match self {
+                        $(
+                            $(#[$attr])*
+                            Self::$PX(p) => p.is_low(),
+                        )*
+                        _ => false,
+                    }
+                }
+            }
+
+            #[allow(unreachable_patterns)]
+            impl $crate::gpio::PinSpeed for $name {
+                fn set_speed(&mut self, _speed: $crate::gpio::Speed) {
+                    match self {
+                        $(
+                            $(#[$attr])*
+                            Self::$PX(p) => p.set_speed(_speed),
+                        )*
+                        _ => {}
+                    }
+                }
+            }
+
+            #[allow(unreachable_patterns)]
+            impl $crate::gpio::PinPull for $name {
+                fn set_internal_resistor(&mut self, _pull: $crate::gpio::Pull) {
+                    match self {
+                        $(
+                            $(#[$attr])*
+                            Self::$PX(p) => p.set_internal_resistor(_pull),
+                        )*
+                        _ => {}
+                    }
+                }
+            }
+
+            #[allow(unreachable_patterns)]
+            impl $crate::gpio::ExtiPin for $name {
+                extipin! { $( $(#[$attr])* $PX, )* }
+            }
+
             $(
-                impl<MODE> PinA<$Pin, pac::$I2C> for gpio::$PX<MODE> {
-                    type A = Const<$A>;
+                impl From<$NoPin<$Otype>> for $name {
+                    fn from(p: $NoPin<$Otype>) -> Self {
+                        Self::None(p)
+                    }
+                }
+            )?
+
+            $(
+                $(#[$attr])*
+                impl<MODE> From<gpio::$PX<MODE>> for $name
+                where
+                    MODE: $crate::gpio::marker::NotAlt + $crate::gpio::PinMode
+                {
+                    fn from(p: gpio::$PX<MODE>) -> Self {
+                        Self::$PX(p.into_mode() $(.speed($crate::gpio::Speed::$Speed))?)
+                    }
+                }
+
+                $(#[$attr])*
+                impl From<gpio::$PX<$crate::gpio::Alternate<$A, $Otype>>> for $name {
+                    fn from(p: gpio::$PX<$crate::gpio::Alternate<$A, $Otype>>) -> Self {
+                        Self::$PX(p $(.speed($crate::gpio::Speed::$Speed))?)
+                    }
+                }
+
+                $(#[$attr])*
+                #[allow(irrefutable_let_patterns)]
+                impl<MODE> TryFrom<$name> for gpio::$PX<MODE>
+                where
+                    MODE: $crate::gpio::PinMode,
+                    $crate::gpio::Alternate<$A, $Otype>: $crate::gpio::PinMode,
+                {
+                    type Error = ();
+
+                    fn try_from(a: $name) -> Result<Self, Self::Error> {
+                        if let $name::$PX(p) = a {
+                            Ok(p.into_mode())
+                        } else {
+                            Err(())
+                        }
+                    }
+                }
+            )*
+        )*
+    };
+
+    ( $($(#[$docs:meta])* <$name:ident> default:$DefaultOtype:ident for $(no: $NoPin:ident,)? [$(
+            $(#[$attr:meta])* $PX:ident<$A:literal>,
+    )*],)*) => {
+        $(
+            #[derive(Debug)]
+            $(#[$docs])*
+            pub enum $name<Otype = $DefaultOtype> {
+                $(
+                    None($NoPin<Otype>),
+                )?
+
+                $(
+                    $(#[$attr])*
+                    $PX(gpio::$PX<$crate::gpio::Alternate<$A, Otype>>),
+                )*
+            }
+
+            impl<Otype> crate::Sealed for $name<Otype> { }
+
+            #[allow(unreachable_patterns)]
+            impl<Otype> $crate::gpio::ReadPin for $name<Otype> {
+                fn is_low(&self) -> bool {
+                    match self {
+                        $(
+                            $(#[$attr])*
+                            Self::$PX(p) => p.is_low(),
+                        )*
+                        _ => false,
+                    }
+                }
+            }
+
+            #[allow(unreachable_patterns)]
+            impl<Otype> $crate::gpio::PinSpeed for $name<Otype> {
+                fn set_speed(&mut self, _speed: $crate::gpio::Speed) {
+                    match self {
+                        $(
+                            $(#[$attr])*
+                            Self::$PX(p) => p.set_speed(_speed),
+                        )*
+                        _ => {}
+                    }
+                }
+            }
+
+            #[allow(unreachable_patterns)]
+            impl<Otype> $crate::gpio::PinPull for $name<Otype> {
+                fn set_internal_resistor(&mut self, _pull: $crate::gpio::Pull) {
+                    match self {
+                        $(
+                            $(#[$attr])*
+                            Self::$PX(p) => p.set_internal_resistor(_pull),
+                        )*
+                        _ => {}
+                    }
+                }
+            }
+
+            #[allow(unreachable_patterns)]
+            impl<Otype> $crate::gpio::ExtiPin for $name<Otype> {
+                extipin! { $( $(#[$attr])* $PX, )* }
+            }
+
+            $(
+                impl<Otype> From<$NoPin<Otype>> for $name<Otype> {
+                    fn from(p: $NoPin<Otype>) -> Self {
+                        Self::None(p)
+                    }
+                }
+            )?
+
+            $(
+                $(#[$attr])*
+                impl<MODE, Otype> From<gpio::$PX<MODE>> for $name<Otype>
+                where
+                    MODE: $crate::gpio::marker::NotAlt + $crate::gpio::PinMode,
+                    $crate::gpio::Alternate<$A, Otype>: $crate::gpio::PinMode,
+                {
+                    fn from(p: gpio::$PX<MODE>) -> Self {
+                        Self::$PX(p.into_mode())
+                    }
+                }
+
+                $(#[$attr])*
+                impl<Otype> From<gpio::$PX<$crate::gpio::Alternate<$A, Otype>>> for $name<Otype> {
+                    fn from(p: gpio::$PX<$crate::gpio::Alternate<$A, Otype>>) -> Self {
+                        Self::$PX(p)
+                    }
+                }
+
+                $(#[$attr])*
+                #[allow(irrefutable_let_patterns)]
+                impl<MODE, Otype> TryFrom<$name<Otype>> for gpio::$PX<MODE>
+                where
+                    MODE: $crate::gpio::PinMode,
+                    $crate::gpio::Alternate<$A, Otype>: $crate::gpio::PinMode,
+                {
+                    type Error = ();
+
+                    fn try_from(a: $name<Otype>) -> Result<Self, Self::Error> {
+                        if let $name::$PX(p) = a {
+                            Ok(p.into_mode())
+                        } else {
+                            Err(())
+                        }
+                    }
                 }
             )*
         )*
     };
 }
+use pin;
 
 // CAN pins
+#[cfg(feature = "can1")]
+pub trait CanCommon {
+    type Rx;
+    type Tx;
+}
 
-#[cfg(all(feature = "can", any(feature = "can1", feature = "can2")))]
-mod can {
-    use super::*;
-    use crate::can;
+// DFSDM pins
+#[cfg(feature = "dfsdm")]
+pub trait DfsdmBasic {
+    type Ckin0;
+    type Ckin1;
+    type Ckout;
+    type Datin0;
+    type Datin1;
+}
+#[cfg(feature = "dfsdm")]
+pub trait DfsdmGeneral: DfsdmBasic {
+    type Ckin2;
+    type Ckin3;
+    type Datin2;
+    type Datin3;
+}
+#[cfg(feature = "dfsdm")]
+pub trait DfsdmAdvanced: DfsdmGeneral {
+    type Ckin4;
+    type Ckin5;
+    type Ckin6;
+    type Ckin7;
+    type Datin4;
+    type Datin5;
+    type Datin6;
+    type Datin7;
+}
 
-    pin! {
-        <can::Tx, CAN1> for [PA12<9>, PD1<9>],
-        <can::Rx, CAN1> for [PA11<9>, PD0<9>],
-
-        <can::Tx, CAN2> for [PB13<9>, PB6<9>],
-        <can::Rx, CAN2> for [PB12<9>, PB5<9>]
-    }
-
-    #[cfg(any(feature = "stm32f412", feature = "stm32f413", feature = "stm32f423"))]
-    pin! {
-        <can::Tx, CAN1> for [PB9<8>],
-        <can::Rx, CAN1> for [PB8<8>]
-    }
-
-    #[cfg(any(
-        feature = "stm32f405",
-        feature = "stm32f407",
-        feature = "stm32f415",
-        feature = "stm32f417",
-        feature = "stm32f427",
-        feature = "stm32f429",
-        feature = "stm32f437",
-        feature = "stm32f439",
-        feature = "stm32f446",
-        feature = "stm32f469",
-        feature = "stm32f479"
-    ))]
-    pin! {
-        <can::Tx, CAN1> for [PB9<9>],
-        <can::Rx, CAN1> for [PB8<9>]
-    }
-
-    #[cfg(any(feature = "stm32f412", feature = "stm32f413", feature = "stm32f423"))]
-    pin! {
-        <can::Tx, CAN1> for [PG1<9>],
-        <can::Rx, CAN1> for [PG0<9>],
-
-        <can::Tx, CAN2> for [PG12<9>],
-        <can::Rx, CAN2> for [PG11<9>]
-    }
-
-    #[cfg(any(
-        feature = "stm32f405",
-        feature = "stm32f407",
-        feature = "stm32f415",
-        feature = "stm32f417",
-        feature = "stm32f427",
-        feature = "stm32f429",
-        feature = "stm32f437",
-        feature = "stm32f439",
-        feature = "stm32f469",
-        feature = "stm32f479"
-    ))]
-    pin! {
-        <can::Tx, CAN1> for [PH13<9>],
-        <can::Rx, CAN1> for [PI9<9>]
-    }
-
-    #[cfg(feature = "can3")]
-    pin! {
-        <can::Tx, CAN3> for [PA15<11>, PB4<11>],
-        <can::Rx, CAN3> for [PA8<11>, PB3<11>]
-    }
+// Serial pins
+pub trait SerialAsync {
+    /// Receive
+    type Rx<Otype>;
+    /// Transmit
+    type Tx<Otype>;
+}
+/// Synchronous mode
+pub trait SerialSync {
+    type Ck;
+}
+/// Hardware flow control (RS232)
+pub trait SerialRs232 {
+    /// Receive
+    type Cts;
+    /// Transmit
+    type Rts;
 }
 
 // I2C pins
-
-pin! {
-    <i2c::Scl, I2C1> for [PB6<4>, PB8<4>],
-    <i2c::Sda, I2C1> for [PB7<4>, PB9<4>]
+pub trait I2cCommon {
+    type Scl;
+    type Sda;
+    type Smba;
 }
 
-#[cfg(any(feature = "stm32f446"))]
-pin! { <i2c::Sda, I2C2> for [PB3<4>] }
-
-#[cfg(any(
-    feature = "stm32f401",
-    feature = "stm32f410",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! { <i2c::Sda, I2C2> for [PB3<9>] }
-
-#[cfg(any(
-    feature = "stm32f410",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! { <i2c::Sda, I2C2> for [PB9<9>] }
-
-pin! { <i2c::Scl, I2C2> for [PB10<4>] }
-
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f410",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! { <i2c::Sda, I2C2> for [PB11<4>] }
-
-#[cfg(any(feature = "stm32f446"))]
-pin! { <i2c::Sda, I2C2> for [PC12<4>] }
-
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <i2c::Scl, I2C2> for [PF1<4>],
-    <i2c::Sda, I2C2> for [PF0<4>]
+// I2S pins
+pub trait I2sCommon {
+    type Ck: crate::gpio::PinSpeed;
+    type Sd;
+    type Ws: crate::gpio::ReadPin + crate::gpio::ExtiPin;
+}
+pub trait I2sMaster {
+    type Mck;
+}
+pub trait I2sExtPin {
+    type ExtSd;
 }
 
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <i2c::Scl, I2C2> for [PH4<4>],
-    <i2c::Sda, I2C2> for [PH5<4>]
+// QuadSPI pins
+
+#[cfg(feature = "quadspi")]
+pub trait QuadSpiBanks {
+    type Bank1;
+    type Bank2;
+}
+#[cfg(feature = "quadspi")]
+pub trait QuadSpiBank {
+    type Io0: crate::gpio::PinSpeed;
+    type Io1: crate::gpio::PinSpeed;
+    type Io2: crate::gpio::PinSpeed;
+    type Io3: crate::gpio::PinSpeed;
+    type Ncs: crate::gpio::PinSpeed;
 }
 
-#[cfg(feature = "i2c3")]
-pin! {
-    <i2c::Scl, I2C3> for [PA8<4>],
-    <i2c::Sda, I2C3> for [PC9<4>]
+// SAI pins
+
+#[cfg(feature = "sai1")]
+pub trait SaiChannels {
+    type A;
+    type B;
+}
+#[cfg(feature = "sai1")]
+pub trait SaiChannel {
+    type Fs;
+    type Mclk;
+    type Sck;
+    type Sd;
 }
 
-#[cfg(feature = "stm32f446")]
-pin! { <i2c::Sda, I2C3> for [PB4<4>] }
+// SPDIFRX pins
 
-#[cfg(any(
-    feature = "stm32f401",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! { <i2c::Sda, I2C3> for [PB4<9>] }
-
-#[cfg(any(
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! { <i2c::Sda, I2C3> for [PB8<9>] }
-
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <i2c::Scl, I2C3> for [PH7<4>],
-    <i2c::Sda, I2C3> for [PH8<4>]
-}
-
-#[cfg(feature = "fmpi2c1")]
-pin! {
-    <i2c::Scl, FMPI2C1> for [PC6<4>],
-    <i2c::Sda, FMPI2C1> for [PC7<4>],
-    <i2c::Sda, FMPI2C1> for [PB3<4>],
-    <i2c::Scl, FMPI2C1> for [PB10<9>],
-    <i2c::Sda, FMPI2C1> for [PB14<4>],
-    <i2c::Scl, FMPI2C1> for [PB15<4>],
-    <i2c::Scl, FMPI2C1> for [PD12<4>],
-    <i2c::Scl, FMPI2C1> for [PB13<4>],
-    <i2c::Scl, FMPI2C1> for [PD14<4>],
-    <i2c::Scl, FMPI2C1> for [PD15<4>],
-    <i2c::Scl, FMPI2C1> for [PF14<4>],
-    <i2c::Scl, FMPI2C1> for [PF15<4>]
+#[cfg(feature = "spdifrx")]
+pub trait SPdifIn<const C: u8> {
+    type In;
 }
 
 // SPI pins
-
-pin! {
-    <spi::Sck,  SPI1> for [PA5<5>, PB3<5>],
-    <spi::Miso, SPI1> for [PA6<5>, PB4<5>],
-    <spi::Mosi, SPI1> for [PA7<5>, PB5<5>],
-
-    <spi::Sck,  SPI2> for [PB10<5>, PB13<5>],
-    <spi::Miso, SPI2> for [PB14<5>, PC2<5>],
-    <spi::Mosi, SPI2> for [PB15<5>, PC3<5>],
-    <spi::Nss,  SPI2> for [PB9<5>, PB12<5>]
+pub trait SpiCommon {
+    type Miso;
+    type Mosi;
+    type Nss;
+    type Sck;
 }
 
-#[cfg(feature = "spi3")]
-pin! {
-    <spi::Sck,  SPI3> for [PB3<6>, PC10<6>],
-    <spi::Miso, SPI3> for [PB4<6>, PC11<6>],
-    <spi::Mosi, SPI3> for [PB5<6>, PC12<6>],
-    <spi::Nss,  SPI3> for [PA4<6>, PA15<6>]
+// Timer pins
+
+/// Input capture / Output compare channel `C`
+pub trait TimCPin<const C: u8> {
+    type Ch<Otype>;
 }
 
-#[cfg(any(
-    feature = "stm32f401",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <spi::Sck,  SPI2> for [PD3<5>],
-
-    <spi::Mosi, SPI3> for [PD6<5>],
-
-    <spi::Sck,  SPI4> for [PE2<5>, PE12<5>],
-    <spi::Miso, SPI4> for [PE5<5>, PE13<5>],
-    <spi::Mosi, SPI4> for [PE6<5>, PE14<5>]
+/// Complementary output channel `C`
+pub trait TimNCPin<const C: u8> {
+    type ChN<Otype>;
 }
 
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <spi::Sck,  SPI2> for [PI1<5>],
-    <spi::Miso, SPI2> for [PI2<5>],
-    <spi::Mosi, SPI2> for [PI3<5>],
-    <spi::Nss,  SPI2> for [PI0<5>]
+/// Break input
+pub trait TimBkin {
+    type Bkin;
 }
 
-#[cfg(any(
-    feature = "stm32f410",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423",
-    feature = "stm32f446"
-))]
-pin! {
-    <spi::Sck, SPI2> for [PC7<5>],
-    <spi::Nss,  SPI1> for [PA4<5>, PA15<5>]
-}
-
-#[cfg(any(
-    feature = "stm32f410",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! {
-    <spi::Sck,  SPI5> for [PB0<6>],
-    <spi::Miso, SPI5> for [PA12<6>],
-    <spi::Mosi, SPI5> for [PA10<6>, PB8<6>],
-    <spi::Nss,  SPI5> for [PB1<6>]
-}
-
-#[cfg(any(
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! {
-
-    <spi::Sck,  SPI3> for [PB12<7>],
-
-    <spi::Sck,  SPI4> for [PB13<6>],
-    <spi::Miso, SPI4> for [PA11<6>],
-    <spi::Mosi, SPI4> for [PA1<5>],
-    <spi::Nss,  SPI4> for [PB12<6>, PE4<5>, PE11<5>],
-
-    <spi::Sck,  SPI5> for [PE2<6>, PE12<6>],
-    <spi::Miso, SPI5> for [PE5<6>, PE13<6>],
-    <spi::Mosi, SPI5> for [PE6<6>, PE14<6>],
-    <spi::Nss,  SPI5> for [PE4<6>, PE11<6>]
-}
-
-#[cfg(any(feature = "stm32f413", feature = "stm32f423"))]
-pin! {
-    <spi::Sck,  SPI2> for [PA9<5>],
-    <spi::Miso, SPI2> for [PA12<5>],
-    <spi::Mosi, SPI2> for [PA10<5>],
-    <spi::Nss,  SPI2> for [PA11<5>]
-}
-
-#[cfg(any(
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <spi::Sck,  SPI5> for [PF7<5>, PH6<5>],
-    <spi::Miso, SPI5> for [PF8<5>, PH7<5>],
-    <spi::Mosi, SPI5> for [PF9<5>, PF11<5>],
-
-    <spi::Sck,  SPI6> for [PG13<5>],
-    <spi::Miso, SPI6> for [PG12<5>],
-    <spi::Mosi, SPI6> for [PG14<5>]
-}
-
-#[cfg(feature = "stm32f446")]
-pin! {
-    <spi::Sck,  SPI2> for [PA9<5>],
-    <spi::Mosi, SPI2> for [PC1<7>],
-    <spi::Nss,  SPI2> for [PB4<7>, PD1<7>],
-
-    <spi::Mosi, SPI3> for [PB0<7>, PB2<7>, PC1<5>, PD0<6>],
-
-    <spi::Sck,  SPI4> for [PG11<6>],
-    <spi::Miso, SPI4> for [PG12<6>, PD0<5>],
-    <spi::Mosi, SPI4> for [PG13<6>]
-}
-
-#[cfg(any(feature = "stm32f469", feature = "stm32f479"))]
-pin! {
-    <spi::Sck,  SPI2> for [PA9<5>],
-    <spi::Mosi, SPI2> for [PC1<5>]
-}
-
-// SPI pins for I2S mode
-pin! {
-    <i2s::Ck,  SPI1> for [PA5<5>, PB3<5>],
-    <i2s::Sd, SPI1> for [PA7<5>, PB5<5>],
-
-    <i2s::Ck,  SPI2> for [PB10<5>, PB13<5>],
-    <i2s::Sd, SPI2> for [PB15<5>, PC3<5>],
-    <i2s::Ws,  SPI2> for [PB9<5>, PB12<5>],
-    <i2s::Mck,  SPI2> for [PC6<5>]
-}
-
-#[cfg(feature = "spi3")]
-pin! {
-    <i2s::Ck,  SPI3> for [PB3<6>, PC10<6>],
-    <i2s::Sd, SPI3> for [PB5<6>, PC12<6>],
-    <i2s::Ws,  SPI3> for [PA4<6>, PA15<6>],
-    <i2s::Mck,  SPI3> for [PC7<6>]
-}
-
-#[cfg(any(
-    feature = "stm32f401",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <i2s::Ck,  SPI2> for [PD3<5>],
-
-    <i2s::Sd, SPI3> for [PD6<5>],
-
-    <i2s::Ck,  SPI4> for [PE2<5>, PE12<5>],
-    <i2s::Sd, SPI4> for [PE6<5>, PE14<5>]
-}
-
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <i2s::Ck,  SPI2> for [PI1<5>],
-    <i2s::Sd, SPI2> for [PI3<5>],
-    <i2s::Ws,  SPI2> for [PI0<5>]
-}
-
-#[cfg(any(
-    feature = "stm32f410",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423",
-    feature = "stm32f446"
-))]
-pin! {
-    <i2s::Ck, SPI2> for [PC7<5>],
-    <i2s::Ws,  SPI1> for [PA4<5>, PA15<5>]
-}
-
-#[cfg(any(
-    feature = "stm32f410",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! {
-    <i2s::Ck,  SPI5> for [PB0<6>],
-    <i2s::Sd, SPI5> for [PA10<6>, PB8<6>],
-    <i2s::Ws,  SPI5> for [PB1<6>]
-}
-
-#[cfg(any(
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! {
-    <i2s::Mck,  SPI2> for [PA3<5>, PA6<6>],
-
-    <i2s::Ck,  SPI3> for [PB12<7>],
-    <i2s::Mck,  SPI3> for [PB10<6>],
-
-    <i2s::Ck,  SPI4> for [PB13<6>],
-    <i2s::Sd, SPI4> for [PA1<5>],
-    <i2s::Ws,  SPI4> for [PB12<6>, PE4<5>, PE11<5>],
-
-    <i2s::Ck,  SPI5> for [PE2<6>, PE12<6>],
-    <i2s::Sd, SPI5> for [PE6<6>, PE14<6>],
-    <i2s::Ws,  SPI5> for [PE4<6>, PE11<6>]
-}
-
-#[cfg(any(feature = "stm32f413", feature = "stm32f423"))]
-pin! {
-    <i2s::Ck,  SPI2> for [PA9<5>],
-    <i2s::Sd, SPI2> for [PA10<5>],
-    <i2s::Ws,  SPI2> for [PA11<5>]
-}
-
-#[cfg(any(
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <i2s::Ck,  SPI5> for [PF7<5>, PH6<5>],
-    <i2s::Sd, SPI5> for [PF9<5>, PF11<5>],
-
-    <i2s::Ck,  SPI6> for [PG13<5>],
-    <i2s::Sd, SPI6> for [PG14<5>]
-}
-
-#[cfg(feature = "stm32f446")]
-pin! {
-    <i2s::Ck,  SPI2> for [PA9<5>],
-    <i2s::Sd, SPI2> for [PC1<7>],
-    <i2s::Ws,  SPI2> for [PB4<7>, PD1<7>],
-
-    <i2s::Sd, SPI3> for [PB0<7>, PB2<7>, PC1<5>, PD0<6>],
-
-    <i2s::Ck,  SPI4> for [PG11<6>],
-    <i2s::Sd, SPI4> for [PG13<6>]
-}
-
-#[cfg(any(feature = "stm32f469", feature = "stm32f479"))]
-pin! {
-    <i2s::Ck,  SPI2> for [PA9<5>],
-    <i2s::Sd, SPI2> for [PC1<5>]
-}
-
-#[cfg(any(
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423",
-    feature = "stm32f446",
-))]
-pin! { <i2s::Mck,  SPI1> for [PC4<5>] }
-
-#[cfg(feature = "stm32f410")]
-pin! { <i2s::Mck,  SPI1> for [PC7<6>, PB10<6>] }
-
-// Serial pins
-
-pin! {
-    <serial::TxPin, USART1> for [PA9<7>, PB6<7>],
-    <serial::RxPin, USART1> for [PA10<7>, PB7<7>],
-
-    <serial::TxPin, USART2> for [PA2<7>],
-    <serial::RxPin, USART2> for [PA3<7>],
-
-    <serial::TxPin, USART6> for [PC6<8>],
-    <serial::RxPin, USART6> for [PC7<8>]
-}
-
-#[cfg(any(
-    feature = "stm32f410",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! {
-    <serial::TxPin, USART1> for [PA15<7>],
-    <serial::RxPin, USART1> for [PB3<7>]
-}
-
-#[cfg(any(
-    feature = "stm32f401",
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <serial::TxPin, USART2> for [PD5<7>],
-    <serial::RxPin, USART2> for [PD6<7>]
-}
-
-#[cfg(feature = "usart3")]
-pin! {
-    <serial::TxPin, USART3> for [PB10<7>],
-    <serial::RxPin, USART3> for [PB11<7>]
-}
-
-#[cfg(any(
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423",
-    feature = "stm32f446"
-))]
-pin! {
-    <serial::RxPin, USART3> for [PC5<7>]
-}
-
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <serial::TxPin, USART3> for [PC10<7>],
-    <serial::RxPin, USART3> for [PC11<7>]
-}
-
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <serial::TxPin, USART3> for [PD8<7>],
-    <serial::RxPin, USART3> for [PD9<7>]
-}
-
-#[cfg(feature = "uart4")]
-pin! {
-    <serial::TxPin, UART4> for [PA0<8>],
-    <serial::RxPin, UART4> for [PA1<8>]
-}
-
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <serial::TxPin, UART4> for [PC10<8>],
-    <serial::RxPin, UART4> for [PC11<8>]
-}
-#[cfg(feature = "uart5")]
-pin! {
-    <serial::TxPin, UART5> for [PC12<8>],
-    <serial::RxPin, UART5> for [PD2<8>]
-}
-
-#[cfg(any(feature = "stm32f446"))]
-pin! {
-    <serial::TxPin, UART5> for [PE8<8>],
-    <serial::RxPin, UART5> for [PE7<8>]
-}
-
-#[cfg(any(
-    feature = "stm32f401",
-    feature = "stm32f410",
-    feature = "stm32f411",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f423"
-))]
-pin! {
-    <serial::TxPin, USART6> for [PA11<8>],
-    <serial::RxPin, USART6> for [PA12<8>]
-}
-
-#[cfg(any(
-    feature = "stm32f405",
-    feature = "stm32f407",
-    feature = "stm32f412",
-    feature = "stm32f413",
-    feature = "stm32f415",
-    feature = "stm32f417",
-    feature = "stm32f423",
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479"
-))]
-pin! {
-    <serial::TxPin, USART6> for [PG14<8>],
-    <serial::RxPin, USART6> for [PG9<8>]
-}
-
-#[cfg(all(feature = "uart7", feature = "gpioe"))]
-pin! {
-    <serial::TxPin, UART7> for [PE8<8>],
-    <serial::RxPin, UART7> for [PE7<8>]
-}
-
-#[cfg(all(feature = "uart7", feature = "gpiof"))]
-pin! {
-    <serial::TxPin, UART7> for [PF7<8>],
-    <serial::RxPin, UART7> for [PF6<8>]
-}
-
-#[cfg(all(feature = "uart8", feature = "gpioe"))]
-pin! {
-    <serial::TxPin, UART8> for [PE1<8>],
-    <serial::RxPin, UART8> for [PE0<8>]
-}
-
-#[cfg(any(feature = "stm32f413", feature = "stm32f423"))]
-pin! {
-    <serial::TxPin, UART4> for [PA12<11>, PD1<11>, PD10<8>],
-    <serial::RxPin, UART4> for [PA11<11>, PD0<11>, PC11<8>],
-
-    <serial::TxPin, UART5> for [PB6<11>, PB9<11>, PB13<11>],
-    <serial::RxPin, UART5> for [PB5<11>, PB8<11>, PB12<11>],
-
-    <serial::TxPin, UART7> for [PA15<8>, PB4<8>],
-    <serial::RxPin, UART7> for [PA8<8>, PB3<8>],
-
-    <serial::TxPin, UART8> for [PF9<8>],
-    <serial::RxPin, UART8> for [PF8<8>],
-
-    <serial::TxPin, UART9> for [PD15<11>, PG1<11>],
-    <serial::RxPin, UART9> for [PD14<11>, PG0<11>],
-
-    <serial::TxPin, UART10> for [PE3<11>, PG12<11>],
-    <serial::RxPin, UART10> for [PE2<11>, PG11<11>]
+/// External trigger timer input
+pub trait TimEtr {
+    type Etr;
 }

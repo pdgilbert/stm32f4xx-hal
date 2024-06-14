@@ -27,7 +27,7 @@ use crate::hal::{
     interrupt, pac,
     prelude::*,
     rcc::{Clocks, Rcc},
-    timer::{CounterUs, Event, Timer},
+    timer::{CounterUs, Event, Flag, Timer},
 };
 use core::cell::{Cell, RefCell};
 use core::fmt::Write;
@@ -65,15 +65,7 @@ fn main() -> ! {
         let rcc = dp.RCC.constrain();
         let clocks = setup_clocks(rcc);
         let gpiob = dp.GPIOB.split();
-        let i2c = I2c::new(
-            dp.I2C1,
-            (
-                gpiob.pb8.into_alternate().set_open_drain(),
-                gpiob.pb9.into_alternate().set_open_drain(),
-            ),
-            400.kHz(),
-            &clocks,
-        );
+        let i2c = I2c::new(dp.I2C1, (gpiob.pb8, gpiob.pb9), 400.kHz(), &clocks);
 
         let mut syscfg = dp.SYSCFG.constrain();
 
@@ -117,7 +109,7 @@ fn main() -> ! {
             let mut format_buf = String::<10>::new();
             format_elapsed(&mut format_buf, elapsed);
 
-            disp.clear();
+            disp.clear_buffer();
 
             let state = free(|cs| STATE.borrow(cs).get());
             let state_msg = match state {
@@ -145,7 +137,7 @@ fn main() -> ! {
 
             disp.flush().unwrap();
 
-            delay.delay_ms(100u32);
+            delay.delay_ms(100);
         }
     }
 
@@ -156,7 +148,7 @@ fn main() -> ! {
 fn TIM2() {
     free(|cs| {
         if let Some(ref mut tim2) = TIMER_TIM2.borrow(cs).borrow_mut().deref_mut() {
-            tim2.clear_interrupt(Event::Update);
+            tim2.clear_flags(Flag::Update);
         }
 
         let cell = ELAPSED_MS.borrow(cs);
@@ -217,7 +209,7 @@ fn format_elapsed(buf: &mut String<10>, elapsed: u32) {
     let minutes = elapsed_to_m(elapsed);
     let seconds = elapsed_to_s(elapsed);
     let millis = elapsed_to_ms(elapsed);
-    write!(buf, "{}:{:02}.{:03}", minutes, seconds, millis).unwrap();
+    write!(buf, "{minutes}:{seconds:02}.{millis:03}").unwrap();
 }
 
 fn elapsed_to_ms(elapsed: u32) -> u32 {

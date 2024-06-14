@@ -13,7 +13,7 @@
 use panic_halt as _;
 
 use cortex_m_rt::entry;
-use embedded_hal::Direction as RotaryDirection;
+use embedded_hal_02::Direction as RotaryDirection;
 use stm32f4xx_hal::{pac, prelude::*, qei::Qei};
 
 #[entry]
@@ -36,7 +36,7 @@ fn main() -> ! {
     let gpioa = dp.GPIOA.split();
 
     // Connect a rotary encoder to pins A0 and A1.
-    let rotary_encoder_pins = (gpioa.pa0.into_alternate(), gpioa.pa1.into_alternate());
+    let rotary_encoder_pins = (gpioa.pa0, gpioa.pa1);
     let rotary_encoder_timer = dp.TIM2;
     let rotary_encoder = Qei::new(rotary_encoder_timer, rotary_encoder_pins);
 
@@ -58,6 +58,6 @@ fn main() -> ! {
             current_count = new_count;
         }
 
-        delay.delay_ms(10_u32);
+        delay.delay_ms(10);
     }
 }

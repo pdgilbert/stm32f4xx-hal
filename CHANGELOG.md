@@ -7,6 +7,294 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+ - `i2c_scanner` example [#758]
+ - Enable `sdio` for stm32f446
+ - port LTDC implementation and example from stm32f7xx-hal [#731]
+ - IrDA mode for USARTs
+
+### Changed
+
+ - Use `stm32f4-staging` until `stm32f4` is released [#706]
+ - Allow different lengths of buffers in hal_1 SpiBus impl [#566]
+
+[#566]: https://github.com/stm32-rs/stm32f4xx-hal/pull/566
+[#706]: https://github.com/stm32-rs/stm32f4xx-hal/pull/706
+[#731]: https://github.com/stm32-rs/stm32f4xx-hal/pull/731
+[#758]: https://github.com/stm32-rs/stm32f4xx-hal/pull/758
+
+## [v0.21.0] - 2024-05-30
+
+### Changed
+
+ - add trait bound `RegisterBlockImpl` to type `RegisterBlock` associated with `serial::Instance` [#732]
+ - remove unneeded trait bound for methods that take in a `serial::Instance` and use the associated `RegisterBlock`
+ - bump `sdio-host` to 0.9.0, refactor SDIO initialization [#734]
+ - Added non-blocking serial based on DMA [#738]
+ - use RTCCLK for RTC wakeup timer for short durations [#746]
+ - Enable DMA for DualI2sDriver main() and ext() respectively [#684]
+ - Support 8-bit FMC data bus
+ - Port `rtic-time::Monotonic` implementations from `rtic-monotonics` for TIMx [#756]
+
+### Fixed
+
+ - Fix transmission termination in I2C master DMA read [#736]
+ - Prevent starting a new I2C transmission before previous stop finishes [#737]
+ - Fix complementary output polarity for PWM [#754]
+
+[#684]: https://github.com/stm32-rs/stm32f4xx-hal/pull/684
+[#732]: https://github.com/stm32-rs/stm32f4xx-hal/pull/732
+[#734]: https://github.com/stm32-rs/stm32f4xx-hal/pull/734
+[#736]: https://github.com/stm32-rs/stm32f4xx-hal/pull/736
+[#737]: https://github.com/stm32-rs/stm32f4xx-hal/pull/737
+[#738]: https://github.com/stm32-rs/stm32f4xx-hal/pull/738
+[#746]: https://github.com/stm32-rs/stm32f4xx-hal/pull/746
+[#754]: https://github.com/stm32-rs/stm32f4xx-hal/pull/754
+[#756]: https://github.com/stm32-rs/stm32f4xx-hal/pull/756
+
+## [v0.20.0] - 2024-01-14
+
+### Changed
+
+ - shorten gpio ptr access [#719]
+ - bump embedded-hal to `1.0` (no more RC!) [#723]
+ - make `embedded-hal` `1.0` main implementation [#720]
+ - add `embedded-hal-nb::serial` [#726]
+ - rename `rtic` feature to `rtic1`, add `rtic2` [#727]
+ - rename `stm32_i2s_v12x` feature to `i2s` [#718]
+ - Check features enabled in `build-rs` [#718]
+
+[#718]: https://github.com/stm32-rs/stm32f4xx-hal/pull/718
+[#719]: https://github.com/stm32-rs/stm32f4xx-hal/pull/719
+[#720]: https://github.com/stm32-rs/stm32f4xx-hal/pull/720
+[#723]: https://github.com/stm32-rs/stm32f4xx-hal/pull/723
+[#726]: https://github.com/stm32-rs/stm32f4xx-hal/pull/726
+[#727]: https://github.com/stm32-rs/stm32f4xx-hal/pull/727
+
+## [v0.19.0] - 2023-12-11
+
+### Added
+
+ - Added an example to show how to do DMA with UART (Rx only) [#698]
+
+### Changed
+ - bump embedded-hal to `1.0-rc2` [#704]
+ - Use `as_ptr` for register address casting [#703]
+ - Updated `synopsys-usb-otg` to `0.4.0` [#699]
+ - use `repr(u32)` for flags, revert `spi::CrcError` clean [#709]
+ - revert `spi::check_read`/`check_write` [#712]
+
+### Fixed
+
+ - Wait at least given time in `embedded-hal` `delay` [#704]
+
+## [v0.18.0] - 2023-11-19
+
+ - bump embedded-hal to `1.0-rc1` (remove `serial` part) [#694]
+ - complete and rework Dma Stream API [#666]
+ - Use `enumflags2::BitFlags` for interrupt flags and events [#673]
+ - SPI bidi takes 2 pins [#526]
+ - `Fast Read Quad I/O (EBh)` in `qspi-w25q` example now matches W25QXX datasheet. [#682]
+ - `embedded-storage` version bumped to 0.3 [#693]
+
+### Fixed
+
+ - fix serial RxN & TxN alises [#680]
+
+### Added
+
+ - add `.set_count()` for QEI, add `.write_count()` for TIM [#677]
+ - add "Fast start" section in README [#678]
+
+[#526]: https://github.com/stm32-rs/stm32f4xx-hal/pull/526
+[#666]: https://github.com/stm32-rs/stm32f4xx-hal/pull/666
+[#673]: https://github.com/stm32-rs/stm32f4xx-hal/pull/673
+[#677]: https://github.com/stm32-rs/stm32f4xx-hal/pull/677
+[#678]: https://github.com/stm32-rs/stm32f4xx-hal/pull/678
+[#680]: https://github.com/stm32-rs/stm32f4xx-hal/pull/680
+[#682]: https://github.com/stm32-rs/stm32f4xx-hal/pull/682
+[#693]: https://github.com/stm32-rs/stm32f4xx-hal/pull/693
+[#694]: https://github.com/stm32-rs/stm32f4xx-hal/pull/694
+[#699]: https://github.com/stm32-rs/stm32f4xx-hal/pull/699
+[#703]: https://github.com/stm32-rs/stm32f4xx-hal/pull/703
+[#704]: https://github.com/stm32-rs/stm32f4xx-hal/pull/704
+[#709]: https://github.com/stm32-rs/stm32f4xx-hal/pull/709
+[#712]: https://github.com/stm32-rs/stm32f4xx-hal/pull/712
+
+## [v0.17.1] - 2023-07-24
+
+### Changed
+
+ - implement `embedded_hal::blocking::i2c::Transactional` for `I2c` [#671]
+
+### Fixed
+
+ - reset timer interrupt in `Counter::start` [#670]
+
+[#670]: https://github.com/stm32-rs/stm32f4xx-hal/pull/670
+[#671]: https://github.com/stm32-rs/stm32f4xx-hal/pull/671
+
+## [v0.17.0] - 2023-07-11
+
+### Changed
+
+ - `rcc::Enable`, `rcc::LPEnable` traits, timclk in `Clocks` instead of prescalers [#665]
+ - move gpio, dma impls, adc pins in subdir, remove unused `From` impls [#658] [#664]
+ - Bump `embedded-hal` to `1.0.0-alpha.11`. See [their changelog][embedded-hal-1.0.0-alpha.11] for further details. Note that this included breaking changes to the previous alpha APIs. [#663],[#668]
+ - Fix race condition in sending start condition in I2C. [#662]
+
+[#658]: https://github.com/stm32-rs/stm32f4xx-hal/pull/658
+[#662]: https://github.com/stm32-rs/stm32f4xx-hal/pull/662
+[#663]: https://github.com/stm32-rs/stm32f4xx-hal/pull/663
+[#664]: https://github.com/stm32-rs/stm32f4xx-hal/pull/664
+[#665]: https://github.com/stm32-rs/stm32f4xx-hal/pull/665
+[#668]: https://github.com/stm32-rs/stm32f4xx-hal/pull/668
+[embedded-hal-1.0.0-alpha.11]: https://github.com/rust-embedded/embedded-hal/blob/v1.0.0-alpha.11/embedded-hal/CHANGELOG.md
+
+## [v0.16.2] - 2023-06-27
+
+### Changed
+
+ - enable `defmt` feature for VSCode, `set_alarm` takes `Into<AlarmDay>` [#660]
+ - Optimize watchdog setup calculation [#657]
+
+### Fixed
+
+ - Compilation with `defmt` feature enabled
+
+[#657]: https://github.com/stm32-rs/stm32f4xx-hal/pull/657
+[#660]: https://github.com/stm32-rs/stm32f4xx-hal/pull/660
+
+## [v0.16.1] - 2023-06-24
+
+ - bors bot replaced with GH merge queue [#652]
+ - Integrate new version of stm32_i2s (v0.5) to enable full-duplex operation [#637]
+ - Add a rtic example to show how to do full-duplex i2s [#637]
+
+### Changed
+
+ - Set `Speed::VeryHigh` default for FMC, SDIO & OTG_HS_ULPI pins, clean into_alternate in examples [#632]
+ - Join `Serial`, `Rx`, `Tx` for `USART` and `UART` again. Make inner traits with different implementation for USART and UART. [#636]
+
+### Added
+
+ - `into_mode` for `ErasedPin` and `PartiallyErasedPin` [#647]
+ - Extended 64-bit monotonic timer [#640]
+ - Basic blocking QSPI interface [#645]
+ - Rtc: add subsecond reading, add interrupts [#446]
+
+### Fixed
+
+ - Fix #604 pwm output [#655]
+ - map `$SpiSlave` into `SpiSlave` struct in `spi!` macro [#635]
+
+[#446]: https://github.com/stm32-rs/stm32f4xx-hal/pull/446
+[#632]: https://github.com/stm32-rs/stm32f4xx-hal/pull/632
+[#635]: https://github.com/stm32-rs/stm32f4xx-hal/pull/635
+[#636]: https://github.com/stm32-rs/stm32f4xx-hal/pull/636
+[#637]: https://github.com/stm32-rs/stm32f4xx-hal/pull/637
+[#640]: https://github.com/stm32-rs/stm32f4xx-hal/pull/640
+[#645]: https://github.com/stm32-rs/stm32f4xx-hal/pull/645
+[#647]: https://github.com/stm32-rs/stm32f4xx-hal/pull/647
+[#652]: https://github.com/stm32-rs/stm32f4xx-hal/pull/652
+[#655]: https://github.com/stm32-rs/stm32f4xx-hal/pull/655
+
+## [v0.16.0] - 2023-05-07
+
+### Changed
+
+ - Use `enum`s for alternate peripheral pins (generic over otype) [#594] [#596] [#600] [#610] [#617]
+ - Add `ReadPin`, `PinSpeed` & `PinPull` traits [#623]
+ - Split USART and UART implementations [#608]
+ - Split SPI master and slave implementations [#609]
+ - Simplify `gpio::Outport` [#611]
+ - Add autoimplementations of `DMASet` [#614]
+ - `ws2812::prerendered` in example [#615]
+ - Integrate new version of stm32_i2s (v0.4) [#626]
+
+### Added
+
+ - Improve SPI::new* docs [#587]
+ - Add advanced timer dead time insertion example [#585]
+ - Added missing U(S)ART DMA traits for HAL serial types [#593]
+ - I2c dma can now use single DMA channel for TX or RX only [#598]
+ - Improve SPI::new* docs [#587]
+ - Implement `serial::RxISR` for `dma::Transfer<..., PERIPHERAL, ...>` where `PERIPHERAL: serial::RxISR`, add `rtic-serial-dma-rx-idle` example [#588]
+ - Add `lapce` editor settings [#601]
+ - rcc `enable_unchecked`, timer features [#618]
+
+### Fixed
+
+ - Cleanups [#595]
+ - Fix comlementary for independent channels [#599] [#603]
+ - Fix mstr bit for SPI Master/Slave [#625]
+
+[#585]: https://github.com/stm32-rs/stm32f4xx-hal/pull/585
+[#587]: https://github.com/stm32-rs/stm32f4xx-hal/pull/587
+[#588]: https://github.com/stm32-rs/stm32f4xx-hal/pull/588
+[#593]: https://github.com/stm32-rs/stm32f4xx-hal/pull/593
+[#594]: https://github.com/stm32-rs/stm32f4xx-hal/pull/594
+[#595]: https://github.com/stm32-rs/stm32f4xx-hal/pull/595
+[#598]: https://github.com/stm32-rs/stm32f4xx-hal/pull/598
+[#599]: https://github.com/stm32-rs/stm32f4xx-hal/pull/599
+[#601]: https://github.com/stm32-rs/stm32f4xx-hal/pull/601
+[#603]: https://github.com/stm32-rs/stm32f4xx-hal/pull/603
+[#610]: https://github.com/stm32-rs/stm32f4xx-hal/pull/610
+[#608]: https://github.com/stm32-rs/stm32f4xx-hal/pull/608
+[#609]: https://github.com/stm32-rs/stm32f4xx-hal/pull/609
+[#611]: https://github.com/stm32-rs/stm32f4xx-hal/pull/611
+[#614]: https://github.com/stm32-rs/stm32f4xx-hal/pull/614
+[#615]: https://github.com/stm32-rs/stm32f4xx-hal/pull/615
+[#617]: https://github.com/stm32-rs/stm32f4xx-hal/pull/617
+[#618]: https://github.com/stm32-rs/stm32f4xx-hal/pull/618
+[#623]: https://github.com/stm32-rs/stm32f4xx-hal/pull/623
+[#625]: https://github.com/stm32-rs/stm32f4xx-hal/pull/625
+[#626]: https://github.com/stm32-rs/stm32f4xx-hal/pull/626
+
+## [v0.15.0] - 2023-03-13
+
+### Changed
+
+ - Bump `nb` to 1.1
+ - Bump `synopsys-usb-otg` to 0.3.2 (bug fix) [#575]
+ - Update readme, clippy fixes
+ - Added possibility to pass complementary pins to `Pwm` and change pwm channel polarity [#571],
+   set dead time and idle state for advanced timers [#578] [#581]
+
+### Added
+
+ - Docs in `rtic-adc-dma` example [#532]
+ - `OutPortX` (X = 2..8) and `OutPortArray` structures which can handle several pins at once [#426]
+ - `restore` for `ErasedPin` and `PartiallyErasedPin` [#563]
+ - Added a public method to set SSI bit in SPI. [#543]
+
+### Fixed
+
+ - `spi-dma` example pins speed
+ - Fix alternate function pin definitions for FMPI2C1 [#572]
+ - Fix SDIO hardware flow control errata [#577]
+
+[#426]: https://github.com/stm32-rs/stm32f4xx-hal/pull/426
+[#532]: https://github.com/stm32-rs/stm32f4xx-hal/pull/532
+[#543]: https://github.com/stm32-rs/stm32f4xx-hal/pull/543
+[#563]: https://github.com/stm32-rs/stm32f4xx-hal/pull/563
+[#571]: https://github.com/stm32-rs/stm32f4xx-hal/pull/571
+[#572]: https://github.com/stm32-rs/stm32f4xx-hal/pull/572
+[#575]: https://github.com/stm32-rs/stm32f4xx-hal/pull/575
+[#577]: https://github.com/stm32-rs/stm32f4xx-hal/pull/577
+[#578]: https://github.com/stm32-rs/stm32f4xx-hal/pull/578
+[#581]: https://github.com/stm32-rs/stm32f4xx-hal/pull/581
+[#594]: https://github.com/stm32-rs/stm32f4xx-hal/pull/594
+[#595]: https://github.com/stm32-rs/stm32f4xx-hal/pull/595
+[#596]: https://github.com/stm32-rs/stm32f4xx-hal/pull/596
+[#599]: https://github.com/stm32-rs/stm32f4xx-hal/pull/599
+[#601]: https://github.com/stm32-rs/stm32f4xx-hal/pull/601
+[#603]: https://github.com/stm32-rs/stm32f4xx-hal/pull/603
+[#600]: https://github.com/stm32-rs/stm32f4xx-hal/pull/600
+
+## [v0.14.0] - 2022-12-12
+
 ### Changed
 
  - Add missing timer pins [#536]
@@ -24,6 +312,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
  - Bump `embedded-hal` to `1.0.0-alpha.8` [#510]
  - Update `bxcan`, `rtic` and other dependencies [#519]
  - Bump `synopsys-usb-otg` to `0.3.1` [#535]
+ - Renamed and updated rtic-button example (was rtic) [#551]
+ - Rename adc_dma_rtic to rtic-adc-dma and move it to defmt [#552]
+ - Rename spi_slave_dma_rtic to rtic-spi-slave-dma and unbroke it [#552]
+ - Rename i2s-rtic-audio-in-out to rtic-i2s-audio-in-out [#552]
 
 ### Removed
  - `i2s-audio-out-dma.rs` example, too difficult to fix.
@@ -31,10 +323,29 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Fixed
  - use register.modify instead of register.write to start PWM [#501]
  - add missing generic param for Spi::release implementation.
+ - build rtic-usb-cdc-echo example [#554]
+ - reset timer cnt register when changing pwm period [#555]
+ - Trait typo preventing ADC2 being used with DMA2 [#557]
 
 ### Added
 
-- Serial Tx, Rx containing pins [#514] [#515]
+ - Serial Tx, Rx containing pins [#514] [#515] [#540]
+ - example of using ft6x06 touchscreen driver for stm32f412 and stm32f413 [#527]
+ - Serial Tx, Rx containing pins [#514] [#515]
+ - Implementation of From trait for Pin-to-PartiallyErasedPin [#507]
+ - Implementation of From trait for Pin-to-ErasedPin [#507]
+ - Implementation of From trait for PartiallyErasedPin-to-ErasedPin [#507]
+ - `SysMonoTimerExt` helper trait, `Pwm::(get/set)_duty_time` [#497]
+ - example of using i2s in out with rtic and interrupt.
+ - example of using USB CDC with interrupts.
+ - Added non-blocking I2C based on DMA [#534]
+ - Added Transactional I2C API [#542]
+ - Added rtic-usart-shell example [#551]
+ - Added rtic-usart-shell-ssd1306 example [#551]
+ - Added rtic-usb-cdc-echo example [#553]
+ - Add possibility to clear a Serial `Rx` idle interrupt from a DMA `Transfer` [#556]
+
+- Serial Tx, Rx containing pins [#514] [#515] [#540]
 - Implementation of From trait for Pin-to-PartiallyErasedPin [#507]
 - Implementation of From trait for Pin-to-ErasedPin [#507]
 - Implementation of From trait for PartiallyErasedPin-to-ErasedPin [#507]
@@ -42,6 +353,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - example of using i2s in out with rtic and interrupt.
 - example of using USB CDC with interrupts.
 - Added non-blocking I2C based on DMA [#534]
+- Added Transactional I2C API [#542]
+- Added wait method for DMA Transfer.
 
 [#481]: https://github.com/stm32-rs/stm32f4xx-hal/pull/481
 [#489]: https://github.com/stm32-rs/stm32f4xx-hal/pull/489
@@ -55,9 +368,20 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 [#515]: https://github.com/stm32-rs/stm32f4xx-hal/pull/515
 [#517]: https://github.com/stm32-rs/stm32f4xx-hal/pull/517
 [#519]: https://github.com/stm32-rs/stm32f4xx-hal/pull/519
+[#527]: https://github.com/stm32-rs/stm32f4xx-hal/pull/527
 [#529]: https://github.com/stm32-rs/stm32f4xx-hal/pull/529
 [#536]: https://github.com/stm32-rs/stm32f4xx-hal/pull/536
 [#534]: https://github.com/stm32-rs/stm32f4xx-hal/pull/529
+[#535]: https://github.com/stm32-rs/stm32f4xx-hal/pull/535
+[#540]: https://github.com/stm32-rs/stm32f4xx-hal/pull/540
+[#542]: https://github.com/stm32-rs/stm32f4xx-hal/pull/542
+[#551]: https://github.com/stm32-rs/stm32f4xx-hal/pull/551
+[#552]: https://github.com/stm32-rs/stm32f4xx-hal/pull/552
+[#553]: https://github.com/stm32-rs/stm32f4xx-hal/pull/553
+[#554]: https://github.com/stm32-rs/stm32f4xx-hal/pull/554
+[#555]: https://github.com/stm32-rs/stm32f4xx-hal/pull/555
+[#556]: https://github.com/stm32-rs/stm32f4xx-hal/pull/556
+[#557]: https://github.com/stm32-rs/stm32f4xx-hal/pull/557
 
 ## [v0.13.2] - 2022-05-16
 
@@ -298,7 +622,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Features corresponding to peripherals [#311]
 - Improved documentation of rng and prelude [#303]
 - Added an example of integration with RTIC [#295]
-- Added internal pullup configuaration for the AlternateOD pin type [#298]
+- Added internal pullup configuration for the AlternateOD pin type [#298]
 - Added USART support for sending and receiving 9-bit words [#299]
 - Added support for I2S communication using SPI peripherals, and two examples [#265]
 - Added support for some LCD controllers using the Flexible Static Memory
@@ -309,7 +633,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Derive `Eq`, `PartialEq`, `Copy` and `Clone` for error types [#306]
 - Added open-drain pin mode support for PWM output [#313]
 - Added missing error flags for dma streams [#318]
-- Added PWM input capability to all compatable timers [#271]
+- Added PWM input capability to all compatible timers [#271]
 - Bidi mode support for SPI [#349]
 - Added `listen` and `unlisten` for RX- and TX-only USART [#357]
 - Added function for clearing the idle line interrupt in USART [#357]
@@ -455,7 +779,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Added `check_interrupt` method for GPIO pins
 - Basic support for DAC
 - Add initial DMA support
-- Allow specification of ADC reference voltage in ADC configuraton structure
+- Allow specification of ADC reference voltage in ADC configuration structure
 - Added support for hardware-based CRC32 functionality
 - Add `MonoTimer` and `Instant` structs for basic time measurement.
 - Added support for I2S and SAI clocks
@@ -666,11 +990,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Changed
 
-- Made the `rt` feature of stm32f4 optionnal.
+- Made the `rt` feature of stm32f4 optional.
 
 ### Fixed
 
-- Avoid overwritting the cache bits in `flash.acr`.
+- Avoid overwriting the cache bits in `flash.acr`.
 
 ## [v0.2.3] - 2018-11-04
 
@@ -719,7 +1043,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 - Support for stm32f407 and stm32f429.
 
-[Unreleased]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.13.2...HEAD
+[Unreleased]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.21.0...HEAD
+[v0.21.0]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.20.0...v0.21.0
+[v0.20.0]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.19.0...v0.20.0
+[v0.19.0]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.18.0...v0.19.0
+[v0.18.0]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.17.1...v0.18.0
+[v0.17.1]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.17.0...v0.17.1
+[v0.17.0]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.16.2...v0.17.0
+[v0.16.2]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.16.1...v0.16.2
+[v0.16.1]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.16.0...v0.16.1
+[v0.16.0]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.15.0...v0.16.0
+[v0.15.0]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.14.0...v0.15.0
+[v0.14.0]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.13.2...v0.14.0
 [v0.13.2]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.13.1...v0.13.2
 [v0.13.1]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.13.0...v0.13.1
 [v0.13.0]: https://github.com/stm32-rs/stm32f4xx-hal/compare/v0.12.0...v0.13.0

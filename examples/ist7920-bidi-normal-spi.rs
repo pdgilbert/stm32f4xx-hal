@@ -9,7 +9,7 @@ use stm32f4xx_hal as hal;
 
 use crate::hal::{pac, prelude::*, timer::Timer};
 
-use hal::spi::{Mode, NoMiso, Phase, Polarity};
+use hal::spi::{Mode, Phase, Polarity};
 
 use display_interface_spi::SPIInterface;
 use ist7920::Ist7920;
@@ -29,8 +29,7 @@ fn main() -> ! {
     led.set_low();
 
     let sck = gpiob.pb3.into_alternate();
-    let miso = NoMiso {};
-    let mosi = gpiob.pb5.into_alternate();
+    let mosi = gpiob.pb5;
 
     let dc = gpiob.pb4.into_push_pull_output();
     let mut res = gpiob.pb10.into_push_pull_output();
@@ -46,7 +45,7 @@ fn main() -> ! {
     // Change spi transfer mode to Bidi for more efficient operations.
     // let spi = Spi::new(dp.SPI1, (sck, miso, mosi), mode, 8.MHz(), &clocks).to_bidi_transfer_mode();
     // or
-    let spi = dp.SPI1.spi_bidi((sck, miso, mosi), mode, 8.MHz(), &clocks);
+    let spi = dp.SPI1.spi_bidi((sck, mosi), mode, 8.MHz(), &clocks);
 
     let iface = SPIInterface::new(spi, dc, cs);
 
@@ -58,7 +57,7 @@ fn main() -> ! {
 
     let mut select_figure = 0;
     loop {
-        delay.delay_ms(500_u16);
+        delay.delay_ms(500);
         let (begin, end) = match select_figure {
             0 => {
                 select_figure = 1;

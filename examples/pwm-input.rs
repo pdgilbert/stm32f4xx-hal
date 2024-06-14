@@ -6,7 +6,11 @@
 use panic_halt as _;
 
 use cortex_m_rt::entry;
-use stm32f4xx_hal::{pac, prelude::*, timer::Timer};
+use stm32f4xx_hal::{
+    pac,
+    prelude::*,
+    timer::{Channel1, Channel2, Timer},
+};
 
 #[entry]
 fn main() -> ! {
@@ -18,7 +22,7 @@ fn main() -> ! {
         let gpioa = dp.GPIOA.split();
         let gpioc = dp.GPIOC.split();
 
-        let channels = (gpioa.pa8.into_alternate(), gpioa.pa9.into_alternate());
+        let channels = (Channel1::new(gpioa.pa8), Channel2::new(gpioa.pa9));
         // configure tim1 as a PWM output of known frequency.
         let pwm = Timer::new(dp.TIM1, &clocks).pwm_hz(channels, 501.Hz());
         let (mut ch1, _ch2) = pwm.split();
@@ -27,7 +31,7 @@ fn main() -> ! {
         ch1.enable();
 
         // Configure a pin into TIM8_CH1 mode, which will be used to observe an input PWM signal.
-        let pwm_reader_ch1 = gpioc.pc6.into_alternate();
+        let pwm_reader_ch1 = gpioc.pc6;
 
         // configure tim8 as a PWM input, using the best-guess frequency of the input signal.
         let monitor = Timer::new(dp.TIM8, &clocks).pwm_input(500.Hz(), pwm_reader_ch1);

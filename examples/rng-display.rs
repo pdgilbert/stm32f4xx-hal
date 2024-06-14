@@ -35,7 +35,7 @@ use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 use hal::{i2c::I2c, pac, prelude::*};
 use rand_core::RngCore;
 
-use core::fmt;
+use core::fmt::Write;
 use heapless::String;
 
 // dimensions of SSD1306 OLED display known to work
@@ -71,8 +71,8 @@ fn main() -> ! {
         // as per the STM32F407 datasheet. Pin assignment as per the
         // stm32f4-discovery (ST32F407G-DISC1) board.
         let gpiob = dp.GPIOB.split();
-        let scl = gpiob.pb8.into_alternate().set_open_drain();
-        let sda = gpiob.pb9.into_alternate().set_open_drain();
+        let scl = gpiob.pb8;
+        let sda = gpiob.pb9;
         let i2c = I2c::new(dp.I2C1, (scl, sda), 400.kHz(), &clocks);
 
         // Set up the display
@@ -87,13 +87,13 @@ fn main() -> ! {
         let mut format_buf = String::<20>::new();
         loop {
             //display clear
-            disp.clear();
+            disp.clear_buffer();
 
             //this will continuously report an error if RNG_CLK < HCLK/16
             let rand_val = rand_source.next_u32();
 
             format_buf.clear();
-            if fmt::write(&mut format_buf, format_args!("{}", rand_val)).is_ok() {
+            if write!(&mut format_buf, "{rand_val}").is_ok() {
                 let text_style = MonoTextStyleBuilder::new()
                     .font(&FONT_5X8)
                     .text_color(BinaryColor::On)
@@ -105,7 +105,7 @@ fn main() -> ! {
             }
             disp.flush().unwrap();
             //delay a little while between refreshes so the display is readable
-            delay_source.delay_ms(100u8);
+            delay_source.delay_ms(100);
         }
     }
 

@@ -19,16 +19,15 @@
 //! let rand_val = rand_source.next_u32();
 //! ```
 //!
-//! A full exaple can be found [in the examples folder on github](https://github.com/stm32-rs/stm32f4xx-hal/blob/master/examples/rng-display.rs)
+//! A full example can be found [in the examples folder on github](https://github.com/stm32-rs/stm32f4xx-hal/blob/master/examples/rng-display.rs)
 use core::cmp;
 use core::mem;
 
-use crate::pac;
 use crate::pac::RNG;
 use crate::rcc::{Clocks, Enable, Reset};
 use core::num::NonZeroU32;
 use core::ops::Shl;
-use embedded_hal::blocking::rng;
+use embedded_hal_02::blocking::rng;
 use fugit::RateExtU32;
 use rand_core::RngCore;
 
@@ -82,12 +81,12 @@ pub trait RngExt {
 
 impl RngExt for RNG {
     fn constrain(self, clocks: &Clocks) -> Rng {
-        let rcc = unsafe { &*pac::RCC::ptr() };
-
         cortex_m::interrupt::free(|_| {
             // enable RNG_CLK (peripheral clock)
-            RNG::enable(rcc);
-            RNG::reset(rcc);
+            unsafe {
+                RNG::enable_unchecked();
+                RNG::reset_unchecked();
+            }
 
             // verify the clock configuration is valid
             let hclk = clocks.hclk();
@@ -95,7 +94,7 @@ impl RngExt for RNG {
             assert!(rng_clk >= (hclk / 16));
 
             // enable the RNG peripheral
-            self.cr.modify(|_, w| w.rngen().set_bit());
+            self.cr().modify(|_, w| w.rngen().set_bit());
         });
 
         Rng { rb: self }
@@ -125,7 +124,7 @@ impl Rng {
     /// May fail if, for example RNG_CLK is misconfigured.
     fn next_random_word(&mut self) -> Result<u32, ErrorKind> {
         loop {
-            let status = self.rb.sr.read();
+            let status = self.rb.sr().read();
             if status.cecs().bit() {
                 return Err(ErrorKind::ClockError);
             }
@@ -133,12 +132,12 @@ impl Rng {
                 return Err(ErrorKind::SeedError);
             }
             if status.drdy().bit() {
-                return Ok(self.rb.dr.read().rndata().bits());
+                return Ok(self.rb.dr().read().rndata().bits());
             }
         }
     }
 
-    /// Releases ownership of the [RNG](crate::pac::RNG) peripheral object
+    /// Releases ownership of the [`RNG`] peripheral object
     /// (after which `self` can't be used anymore).
     pub fn release(self) -> RNG {
         self.rb

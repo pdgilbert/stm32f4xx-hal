@@ -22,7 +22,7 @@ impl MainPll {
             // Even if we do not use the main PLL, we still need to set the PLL source as that setting
             // applies to the I2S and SAI PLLs as well.
             unsafe { &*RCC::ptr() }
-                .pllcfgr
+                .pllcfgr()
                 .write(|w| w.pllsrc().bit(use_hse));
 
             return MainPll {
@@ -82,7 +82,7 @@ impl MainPll {
         let pllq = (vco_in * plln + 47_999_999) / 48_000_000;
         let real_pll48clk = vco_in * plln / pllq;
 
-        unsafe { &*RCC::ptr() }.pllcfgr.write(|w| unsafe {
+        unsafe { &*RCC::ptr() }.pllcfgr().write(|w| unsafe {
             w.pllm().bits(pllm as u8);
             w.plln().bits(plln as u16);
             w.pllp().bits(pllp as u8);
@@ -101,7 +101,7 @@ impl MainPll {
         }
     }
 
-    #[cfg(feature = "stm32f410")]
+    #[cfg(feature = "gpio-f410")]
     pub fn setup_with_i2s(
         pllsrcclk: u32,
         use_hse: bool,
@@ -144,13 +144,9 @@ impl MainPll {
                         };
 
                         // The 48 MHz clock must be accurate within 0.25% for USB.
-                        let q = if pll48clk {
-                            Some(Self::best_divider(
-                                vco_out, 47_880_000, 48_000_000, 48_120_000, 2, 15,
-                            )?)
-                        } else {
-                            None
-                        };
+                        let q = pll48clk.then_some(Self::best_divider(
+                            vco_out, 47_880_000, 48_000_000, 48_120_000, 2, 15,
+                        )?);
 
                         // We do not set any accuracy requirements for I2S, as on F410 this frequency is
                         // provided on a best-effort basis.
@@ -168,7 +164,7 @@ impl MainPll {
             .min_by_key(|(_, _, _, _, _, error)| *error)
             .expect("could not find a valid main PLL configuration");
 
-        unsafe { &*RCC::ptr() }.pllcfgr.write(|w| unsafe {
+        unsafe { &*RCC::ptr() }.pllcfgr().write(|w| unsafe {
             w.pllm().bits(pllm as u8);
             w.plln().bits(plln as u16);
             if let Some(pllp) = pllp {
@@ -193,7 +189,7 @@ impl MainPll {
         }
     }
 
-    #[cfg(feature = "stm32f410")]
+    #[cfg(feature = "gpio-f410")]
     fn best_divider(
         vco_out: u32,
         min: u32,
@@ -222,7 +218,7 @@ impl MainPll {
     }
 }
 
-#[cfg(not(feature = "stm32f410"))]
+#[cfg(not(feature = "gpio-f410"))]
 pub struct I2sPll {
     pub use_pll: bool,
     /// "M" divisor, required for the other PLLs on some MCUs.
@@ -231,7 +227,7 @@ pub struct I2sPll {
     pub plli2sclk: Option<u32>,
 }
 
-#[cfg(not(feature = "stm32f410"))]
+#[cfg(not(feature = "gpio-f410"))]
 impl I2sPll {
     pub fn unused() -> I2sPll {
         I2sPll {
@@ -242,9 +238,7 @@ impl I2sPll {
     }
 
     pub fn setup(pllsrcclk: u32, plli2sclk: Option<u32>) -> I2sPll {
-        let target = if let Some(clk) = plli2sclk {
-            clk
-        } else {
+        let Some(target) = plli2sclk else {
             return Self::unused();
         };
         // Input divisor from PLL source clock, must result to frequency in
@@ -260,28 +254,17 @@ impl I2sPll {
     }
 
     #[cfg(any(
-        feature = "stm32f401",
-        feature = "stm32f405",
-        feature = "stm32f407",
-        feature = "stm32f415",
-        feature = "stm32f417",
-        feature = "stm32f427",
-        feature = "stm32f429",
-        feature = "stm32f437",
-        feature = "stm32f439",
-        feature = "stm32f469",
-        feature = "stm32f479"
+        feature = "gpio-f401",
+        feature = "gpio-f417",
+        feature = "gpio-f427",
+        feature = "gpio-f469",
     ))]
     pub fn setup_shared_m(pllsrcclk: u32, m: Option<u32>, plli2sclk: Option<u32>) -> I2sPll {
         // "m" is None if the main PLL is not in use.
-        let m = if let Some(m) = m {
-            m
-        } else {
+        let Some(m) = m else {
             return Self::setup(pllsrcclk, plli2sclk);
         };
-        let target = if let Some(clk) = plli2sclk {
-            clk
-        } else {
+        let Some(target) = plli2sclk else {
             return Self::unused();
         };
         let (pll, config, _) = Self::optimize_fixed_m(pllsrcclk, m, target);
@@ -305,64 +288,43 @@ impl I2sPll {
     }
 
     #[cfg(not(any(
-        feature = "stm32f411",
-        feature = "stm32f412",
-        feature = "stm32f413",
-        feature = "stm32f423",
-        feature = "stm32f446",
+        feature = "gpio-f411",
+        feature = "gpio-f412",
+        feature = "gpio-f413",
+        feature = "gpio-f446",
     )))]
     fn apply_config(config: SingleOutputPll) {
         let rcc = unsafe { &*RCC::ptr() };
         // "M" may have been written before, but the value is identical.
-        rcc.pllcfgr
+        rcc.pllcfgr()
             .modify(|_, w| unsafe { w.pllm().bits(config.m) });
-        rcc.plli2scfgr
+        rcc.plli2scfgr()
             .modify(|_, w| unsafe { w.plli2sn().bits(config.n).plli2sr().bits(config.outdiv) });
     }
     #[cfg(any(
-        feature = "stm32f411",
-        feature = "stm32f412",
-        feature = "stm32f413",
-        feature = "stm32f423",
-        feature = "stm32f446",
+        feature = "gpio-f411",
+        feature = "gpio-f412",
+        feature = "gpio-f413",
+        feature = "gpio-f446",
     ))]
     fn apply_config(config: SingleOutputPll) {
         let rcc = unsafe { &*RCC::ptr() };
-        rcc.plli2scfgr.modify(|_, w| unsafe {
-            w.plli2sm()
-                .bits(config.m)
-                .plli2sn()
-                .bits(config.n)
-                .plli2sr()
-                .bits(config.outdiv)
+        rcc.plli2scfgr().modify(|_, w| unsafe {
+            w.plli2sm().bits(config.m);
+            w.plli2sn().bits(config.n);
+            w.plli2sr().bits(config.outdiv)
         });
     }
 }
 
-#[cfg(any(
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479",
-))]
+#[cfg(any(feature = "gpio-f427", feature = "gpio-f446", feature = "gpio-f469"))]
 pub struct SaiPll {
     pub use_pll: bool,
     /// SAI clock (PLL output divided by the SAI clock divider).
     pub sai_clk: Option<u32>,
 }
 
-#[cfg(any(
-    feature = "stm32f427",
-    feature = "stm32f429",
-    feature = "stm32f437",
-    feature = "stm32f439",
-    feature = "stm32f446",
-    feature = "stm32f469",
-    feature = "stm32f479",
-))]
+#[cfg(any(feature = "gpio-f427", feature = "gpio-f446", feature = "gpio-f469"))]
 impl SaiPll {
     pub fn unused() -> SaiPll {
         SaiPll {
@@ -372,9 +334,7 @@ impl SaiPll {
     }
 
     pub fn setup(pllsrcclk: u32, sai_clk: Option<u32>) -> SaiPll {
-        let target = if let Some(clk) = sai_clk {
-            clk
-        } else {
+        let Some(target) = sai_clk else {
             return Self::unused();
         };
         // Input divisor from PLL source clock, must result to frequency in
@@ -389,24 +349,13 @@ impl SaiPll {
         pll
     }
 
-    #[cfg(any(
-        feature = "stm32f427",
-        feature = "stm32f429",
-        feature = "stm32f437",
-        feature = "stm32f439",
-        feature = "stm32f469",
-        feature = "stm32f479"
-    ))]
+    #[cfg(any(feature = "gpio-f427", feature = "gpio-f469"))]
     pub fn setup_shared_m(pllsrcclk: u32, m: Option<u32>, sai_clk: Option<u32>) -> SaiPll {
         // "m" is None if both other PLLs are not in use.
-        let m = if let Some(m) = m {
-            m
-        } else {
+        let Some(m) = m else {
             return Self::setup(pllsrcclk, sai_clk);
         };
-        let target = if let Some(clk) = sai_clk {
-            clk
-        } else {
+        let Some(target) = sai_clk else {
             return Self::unused();
         };
         let (pll, config, saidiv, _) = Self::optimize_fixed_m(pllsrcclk, m, target);
@@ -441,41 +390,38 @@ impl SaiPll {
         )
     }
 
-    #[cfg(not(feature = "stm32f446"))]
+    #[cfg(not(feature = "gpio-f446"))]
     fn apply_config(config: SingleOutputPll, saidiv: u32) {
         let rcc = unsafe { &*RCC::ptr() };
-        rcc.dckcfgr
-            .modify(|_, w| w.pllsaidivq().bits(saidiv as u8 - 1));
+        rcc.dckcfgr()
+            .modify(|_, w| w.pllsaidivq().set(saidiv as u8 - 1));
         // "M" may have been written before, but the value is identical.
-        rcc.pllcfgr
+        rcc.pllcfgr()
             .modify(|_, w| unsafe { w.pllm().bits(config.m) });
-        rcc.pllsaicfgr
+        rcc.pllsaicfgr()
             .modify(|_, w| unsafe { w.pllsain().bits(config.n).pllsaiq().bits(config.outdiv) });
     }
-    #[cfg(feature = "stm32f446")]
+    #[cfg(feature = "gpio-f446")]
     fn apply_config(config: SingleOutputPll, saidiv: u32) {
         let rcc = unsafe { &*RCC::ptr() };
-        rcc.dckcfgr
-            .modify(|_, w| w.pllsaidivq().bits(saidiv as u8 - 1));
-        rcc.pllsaicfgr.modify(|_, w| unsafe {
-            w.pllsaim()
-                .bits(config.m)
-                .pllsain()
-                .bits(config.n)
-                .pllsaiq()
-                .bits(config.outdiv)
+        rcc.dckcfgr()
+            .modify(|_, w| w.pllsaidivq().set(saidiv as u8 - 1));
+        rcc.pllsaicfgr().modify(|_, w| unsafe {
+            w.pllsaim().bits(config.m);
+            w.pllsain().bits(config.n);
+            w.pllsaiq().bits(config.outdiv)
         });
     }
 }
 
-#[cfg(not(feature = "stm32f410"))]
+#[cfg(not(feature = "gpio-f410"))]
 struct SingleOutputPll {
     m: u8,
     n: u16,
     outdiv: u8,
 }
 
-#[cfg(not(feature = "stm32f410"))]
+#[cfg(not(feature = "gpio-f410"))]
 impl SingleOutputPll {
     fn optimize(
         pllsrcclk: u32,

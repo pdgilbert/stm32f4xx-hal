@@ -7,9 +7,10 @@
 use core::convert::TryFrom;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m::peripheral::SYST;
+use enumflags2::BitFlags;
 
 use crate::bb;
-use crate::pac::{self, RCC};
+use crate::pac;
 
 use crate::dma::traits::PeriAddress;
 use crate::rcc::{self, Clocks};
@@ -19,18 +20,32 @@ pub mod counter;
 pub use counter::*;
 pub mod delay;
 pub use delay::*;
-mod pins;
-pub use pins::*;
 pub mod pwm;
 pub use pwm::*;
-#[cfg(not(feature = "stm32f410"))]
+#[cfg(not(feature = "gpio-f410"))]
 pub mod pwm_input;
-#[cfg(not(feature = "stm32f410"))]
+#[cfg(not(feature = "gpio-f410"))]
 pub use pwm_input::PwmInput;
-#[cfg(feature = "rtic")]
+#[cfg(feature = "rtic1")]
 pub mod monotonic;
-#[cfg(feature = "rtic")]
+#[cfg(feature = "rtic1")]
 pub use monotonic::*;
+#[cfg(feature = "rtic2")]
+#[cfg(any(
+    feature = "rtic-tim2",
+    feature = "rtic-tim3",
+    feature = "rtic-tim4",
+    feature = "rtic-tim5"
+))]
+pub mod monotonics;
+#[cfg(feature = "rtic2")]
+#[cfg(any(
+    feature = "rtic-tim2",
+    feature = "rtic-tim3",
+    feature = "rtic-tim4",
+    feature = "rtic-tim5"
+))]
+pub use monotonics::*;
 
 mod hal_02;
 mod hal_1;
@@ -57,7 +72,31 @@ pub enum Channel {
     C4 = 3,
 }
 
-/// Interrupt events
+pub use crate::gpio::alt::TimCPin as CPin;
+pub use crate::gpio::alt::TimNCPin as NCPin;
+
+/// Channel wrapper
+pub struct Ch<const C: u8, const COMP: bool>;
+pub const C1: u8 = 0;
+pub const C2: u8 = 1;
+pub const C3: u8 = 2;
+pub const C4: u8 = 3;
+
+/// Enum for IO polarity
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Polarity {
+    ActiveHigh,
+    ActiveLow,
+}
+
+/// Output Idle state
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdleState {
+    Reset,
+    Set,
+}
+
+/// SysTick interrupt events
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum SysEvent {
@@ -65,14 +104,60 @@ pub enum SysEvent {
     Update,
 }
 
-bitflags::bitflags! {
-    pub struct Event: u32 {
-        const Update  = 1 << 0;
-        const C1 = 1 << 1;
-        const C2 = 1 << 2;
-        const C3 = 1 << 3;
-        const C4 = 1 << 4;
-    }
+/// TIM interrupt events
+#[enumflags2::bitflags]
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Event {
+    /// Update interrupt enable
+    Update = 1 << 0,
+    /// Capture/Compare 1 interrupt enable
+    C1 = 1 << 1,
+    /// Capture/Compare 2 interrupt enable
+    C2 = 1 << 2,
+    /// Capture/Compare 3 interrupt enable
+    C3 = 1 << 3,
+    /// Capture/Compare 4 interrupt enable
+    C4 = 1 << 4,
+    /// COM interrupt enable
+    COM = 1 << 5,
+    /// Trigger interrupt enable
+    Trigger = 1 << 6,
+    /// Break interrupt enable
+    Break = 1 << 7,
+}
+
+/// TIM status flags
+#[enumflags2::bitflags]
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Flag {
+    /// Update interrupt flag
+    Update = 1 << 0,
+    /// Capture/Compare 1 interrupt flag
+    C1 = 1 << 1,
+    /// Capture/Compare 2 interrupt flag
+    C2 = 1 << 2,
+    /// Capture/Compare 3 interrupt flag
+    C3 = 1 << 3,
+    /// Capture/Compare 4 interrupt flag
+    C4 = 1 << 4,
+    /// COM interrupt flag
+    COM = 1 << 5,
+    /// Trigger interrupt flag
+    Trigger = 1 << 6,
+    /// Break interrupt flag
+    Break = 1 << 7,
+    /// Capture/Compare 1 overcapture flag
+    C1Overcapture = 1 << 9,
+    /// Capture/Compare 2 overcapture flag
+    C2Overcapture = 1 << 10,
+    /// Capture/Compare 3 overcapture flag
+    C3Overcapture = 1 << 11,
+    /// Capture/Compare 4 overcapture flag
+    C4Overcapture = 1 << 12,
 }
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
@@ -232,7 +317,7 @@ pub type CCR4<T> = CCR<T, 3>;
 pub struct DMAR<T>(T);
 
 mod sealed {
-    use super::{Channel, Event, Ocm};
+    use super::{BitFlags, Channel, Event, Flag, IdleState, Ocm, Polarity};
     pub trait General {
         type Width: Into<u32> + From<u16>;
         fn max_auto_reload() -> u32;
@@ -240,29 +325,47 @@ mod sealed {
         fn set_auto_reload(&mut self, arr: u32) -> Result<(), super::Error>;
         fn read_auto_reload() -> u32;
         fn enable_preload(&mut self, b: bool);
-        fn enable_counter(&mut self);
-        fn disable_counter(&mut self);
+        fn enable_counter(&mut self, b: bool);
         fn is_counter_enabled(&self) -> bool;
         fn reset_counter(&mut self);
         fn set_prescaler(&mut self, psc: u16);
         fn read_prescaler(&self) -> u16;
         fn trigger_update(&mut self);
-        fn clear_interrupt_flag(&mut self, event: Event);
-        fn listen_interrupt(&mut self, event: Event, b: bool);
-        fn get_interrupt_flag(&self) -> Event;
+        fn listen_event(
+            &mut self,
+            disable: Option<BitFlags<Event>>,
+            enable: Option<BitFlags<Event>>,
+        );
+        fn clear_interrupt_flag(&mut self, event: BitFlags<Flag>);
+        fn get_interrupt_flag(&self) -> BitFlags<Flag>;
         fn read_count(&self) -> Self::Width;
+        fn write_count(&mut self, value: Self::Width);
         fn start_one_pulse(&mut self);
-        fn start_no_update(&mut self);
+        fn start_free(&mut self, update: bool);
         fn cr1_reset(&mut self);
+        fn cnt_reset(&mut self);
     }
 
-    pub trait WithPwm: General {
+    pub trait WithPwmCommon: General {
         const CH_NUMBER: u8;
+        const COMP_CH_NUMBER: u8;
         fn read_cc_value(channel: u8) -> u32;
         fn set_cc_value(channel: u8, value: u32);
+        fn enable_channel(channel: u8, b: bool);
+        fn set_channel_polarity(channel: u8, p: Polarity);
+        fn set_nchannel_polarity(channel: u8, p: Polarity);
+    }
+
+    pub trait Advanced: WithPwmCommon {
+        fn enable_nchannel(channel: u8, b: bool);
+        fn set_dtg_value(value: u8);
+        fn read_dtg_value() -> u8;
+        fn idle_state(channel: u8, comp: bool, s: IdleState);
+    }
+
+    pub trait WithPwm: WithPwmCommon {
         fn preload_output_channel_in_mode(&mut self, channel: Channel, mode: Ocm);
         fn start_pwm(&mut self);
-        fn enable_channel(channel: u8, b: bool);
     }
 
     pub trait MasterTimer: General {
@@ -270,7 +373,7 @@ mod sealed {
         fn master_mode(&mut self, mode: Self::Mms);
     }
 }
-pub(crate) use sealed::{General, MasterTimer, WithPwm};
+pub(crate) use sealed::{Advanced, General, MasterTimer, WithPwm, WithPwmCommon};
 
 pub trait Instance:
     crate::Sealed + rcc::Enable + rcc::Reset + rcc::BusTimerClock + General
@@ -278,141 +381,231 @@ pub trait Instance:
 }
 
 macro_rules! hal {
-    ($($TIM:ty: [
+    ($TIM:ty: [
         $Timer:ident,
         $bits:ty,
         $(dmar: $memsize:ty,)?
-        $(c: ($cnum:ident $(, $aoe:ident)?),)?
+        $(c: ($cnum:tt $(, $aoe:ident)?),)?
         $(m: $timbase:ident,)?
-    ],)+) => {
+    ]) => {
+        impl Instance for $TIM { }
+        pub type $Timer = Timer<$TIM>;
+
+        impl General for $TIM {
+            type Width = $bits;
+
+            #[inline(always)]
+            fn max_auto_reload() -> u32 {
+                <$bits>::MAX as u32
+            }
+            #[inline(always)]
+            unsafe fn set_auto_reload_unchecked(&mut self, arr: u32) {
+                self.arr().write(|w| w.bits(arr))
+            }
+            #[inline(always)]
+            fn set_auto_reload(&mut self, arr: u32) -> Result<(), Error> {
+                // Note: Make it impossible to set the ARR value to 0, since this
+                // would cause an infinite loop.
+                if arr > 0 && arr <= Self::max_auto_reload() {
+                    Ok(unsafe { self.set_auto_reload_unchecked(arr) })
+                } else {
+                    Err(Error::WrongAutoReload)
+                }
+            }
+            #[inline(always)]
+            fn read_auto_reload() -> u32 {
+                let tim = unsafe { &*<$TIM>::ptr() };
+                tim.arr().read().bits()
+            }
+            #[inline(always)]
+            fn enable_preload(&mut self, b: bool) {
+                self.cr1().modify(|_, w| w.arpe().bit(b));
+            }
+            #[inline(always)]
+            fn enable_counter(&mut self, b: bool) {
+                self.cr1().modify(|_, w| w.cen().bit(b));
+            }
+            #[inline(always)]
+            fn is_counter_enabled(&self) -> bool {
+                self.cr1().read().cen().is_enabled()
+            }
+            #[inline(always)]
+            fn reset_counter(&mut self) {
+                self.cnt().reset();
+            }
+            #[inline(always)]
+            fn set_prescaler(&mut self, psc: u16) {
+                self.psc().write(|w| w.psc().set(psc) );
+            }
+            #[inline(always)]
+            fn read_prescaler(&self) -> u16 {
+                self.psc().read().psc().bits()
+            }
+            #[inline(always)]
+            fn trigger_update(&mut self) {
+                self.cr1().modify(|_, w| w.urs().set_bit());
+                self.egr().write(|w| w.ug().set_bit());
+                self.cr1().modify(|_, w| w.urs().clear_bit());
+            }
+            #[inline(always)]
+            fn listen_event(&mut self, disable: Option<BitFlags<Event>>, enable: Option<BitFlags<Event>>) {
+                self.dier().modify(|r, w| unsafe { w.bits({
+                    let mut bits = r.bits();
+                    if let Some(d) = disable {
+                        bits &= !(d.bits() as u32);
+                    }
+                    if let Some(e) = enable {
+                        bits |= e.bits() as u32;
+                    }
+                    bits
+                }) });
+            }
+            #[inline(always)]
+            fn clear_interrupt_flag(&mut self, event: BitFlags<Flag>) {
+                self.sr().write(|w| unsafe { w.bits(0xffff & !(event.bits() as u32)) });
+            }
+            #[inline(always)]
+            fn get_interrupt_flag(&self) -> BitFlags<Flag> {
+                BitFlags::from_bits_truncate(self.sr().read().bits())
+            }
+            #[inline(always)]
+            fn read_count(&self) -> Self::Width {
+                self.cnt().read().bits() as Self::Width
+            }
+            #[inline(always)]
+            fn write_count(&mut self, value:Self::Width) {
+                //TODO: remove "unsafe" when possible
+                #[allow(unused_unsafe)]
+                self.cnt().write(|w|unsafe{w.cnt().bits(value)});
+            }
+            #[inline(always)]
+            fn start_one_pulse(&mut self) {
+                self.cr1().modify(|_, w| unsafe { w.bits(1 << 3) }.cen().set_bit());
+            }
+            #[inline(always)]
+            fn start_free(&mut self, update: bool) {
+                self.cr1().modify(|_, w| w.cen().set_bit().udis().bit(!update));
+            }
+            #[inline(always)]
+            fn cr1_reset(&mut self) {
+                self.cr1().reset();
+            }
+            #[inline(always)]
+            fn cnt_reset(&mut self) {
+                self.cnt().reset();
+            }
+        }
+
+        $(with_dmar!($TIM, $memsize);)?
+
         $(
-            impl Instance for $TIM { }
-            pub type $Timer = Timer<$TIM>;
-
-            impl General for $TIM {
-                type Width = $bits;
+            impl WithPwmCommon for $TIM {
+                const CH_NUMBER: u8 = $cnum;
+                const COMP_CH_NUMBER: u8 = $cnum;
 
                 #[inline(always)]
-                fn max_auto_reload() -> u32 {
-                    <$bits>::MAX as u32
-                }
-                #[inline(always)]
-                unsafe fn set_auto_reload_unchecked(&mut self, arr: u32) {
-                    self.arr.write(|w| w.bits(arr))
-                }
-                #[inline(always)]
-                fn set_auto_reload(&mut self, arr: u32) -> Result<(), Error> {
-                    // Note: Make it impossible to set the ARR value to 0, since this
-                    // would cause an infinite loop.
-                    if arr > 0 && arr <= Self::max_auto_reload() {
-                        Ok(unsafe { self.set_auto_reload_unchecked(arr) })
-                    } else {
-                        Err(Error::WrongAutoReload)
-                    }
-                }
-                #[inline(always)]
-                fn read_auto_reload() -> u32 {
+                fn read_cc_value(c: u8) -> u32 {
                     let tim = unsafe { &*<$TIM>::ptr() };
-                    tim.arr.read().bits()
-                }
-                #[inline(always)]
-                fn enable_preload(&mut self, b: bool) {
-                    self.cr1.modify(|_, w| w.arpe().bit(b));
-                }
-                #[inline(always)]
-                fn enable_counter(&mut self) {
-                    self.cr1.modify(|_, w| w.cen().set_bit());
-                }
-                #[inline(always)]
-                fn disable_counter(&mut self) {
-                    self.cr1.modify(|_, w| w.cen().clear_bit());
-                }
-                #[inline(always)]
-                fn is_counter_enabled(&self) -> bool {
-                    self.cr1.read().cen().is_enabled()
-                }
-                #[inline(always)]
-                fn reset_counter(&mut self) {
-                    self.cnt.reset();
-                }
-                #[inline(always)]
-                fn set_prescaler(&mut self, psc: u16) {
-                    self.psc.write(|w| w.psc().bits(psc) );
-                }
-                #[inline(always)]
-                fn read_prescaler(&self) -> u16 {
-                    self.psc.read().psc().bits()
-                }
-                #[inline(always)]
-                fn trigger_update(&mut self) {
-                    self.cr1.modify(|_, w| w.urs().set_bit());
-                    self.egr.write(|w| w.ug().set_bit());
-                    self.cr1.modify(|_, w| w.urs().clear_bit());
-                }
-                #[inline(always)]
-                fn clear_interrupt_flag(&mut self, event: Event) {
-                    self.sr.write(|w| unsafe { w.bits(0xffff & !event.bits()) });
-                }
-                #[inline(always)]
-                fn listen_interrupt(&mut self, event: Event, b: bool) {
-                    if b {
-                        self.dier.modify(|r, w| unsafe { w.bits(r.bits() | event.bits()) });
+                    if c < Self::CH_NUMBER {
+                        tim.ccr(c as usize).read().bits()
                     } else {
-                        self.dier.modify(|r, w| unsafe { w.bits(r.bits() & !event.bits()) });
+                        0
                     }
                 }
+
                 #[inline(always)]
-                fn get_interrupt_flag(&self) -> Event {
-                    Event::from_bits_truncate(self.sr.read().bits())
+                fn set_cc_value(c: u8, value: u32) {
+                    let tim = unsafe { &*<$TIM>::ptr() };
+                    if c < Self::CH_NUMBER {
+                        #[allow(unused_unsafe)]
+                        tim.ccr(c as usize).write(|w| unsafe { w.bits(value) })
+                    }
                 }
+
                 #[inline(always)]
-                fn read_count(&self) -> Self::Width {
-                    self.cnt.read().bits() as Self::Width
+                fn enable_channel(c: u8, b: bool) {
+                    let tim = unsafe { &*<$TIM>::ptr() };
+                    if c < Self::CH_NUMBER {
+                        unsafe { bb::write(tim.ccer(), c*4, b); }
+                    }
                 }
+
                 #[inline(always)]
-                fn start_one_pulse(&mut self) {
-                    self.cr1.modify(|_, w| unsafe { w.bits(1 << 3) }.cen().set_bit());
+                fn set_channel_polarity(c: u8, p: Polarity) {
+                    let tim = unsafe { &*<$TIM>::ptr() };
+                    if c < Self::CH_NUMBER {
+                        unsafe { bb::write(tim.ccer(), c*4 + 1, p == Polarity::ActiveLow); }
+                    }
                 }
+
                 #[inline(always)]
-                fn start_no_update(&mut self) {
-                    self.cr1.modify(|_, w| w.cen().set_bit().udis().set_bit());
-                }
-                #[inline(always)]
-                fn cr1_reset(&mut self) {
-                    self.cr1.reset();
+                fn set_nchannel_polarity(c: u8, p: Polarity) {
+                    let tim = unsafe { &*<$TIM>::ptr() };
+                    if c < Self::COMP_CH_NUMBER {
+                        unsafe { bb::write(tim.ccer(), c*4 + 3, p == Polarity::ActiveLow); }
+                    }
                 }
             }
 
-            $(with_dmar!($TIM, $memsize);)?
-
             $(
-                with_pwm!($TIM: $cnum $(, $aoe)?);
-                unsafe impl<const C: u8> PeriAddress for CCR<$TIM, C> {
-                    #[inline(always)]
-                    fn address(&self) -> u32 {
-                        &self.0.ccr[C as usize] as *const _ as u32
+                impl Advanced for $TIM {
+                    fn enable_nchannel(c: u8, b: bool) {
+                        let $aoe = ();
+                        let tim = unsafe { &*<$TIM>::ptr() };
+                        if c < Self::COMP_CH_NUMBER {
+                            unsafe { bb::write(tim.ccer(), c*4 + 2, b); }
+                        }
                     }
-
-                    type MemSize = $bits;
+                    fn set_dtg_value(value: u8) {
+                        let tim = unsafe { &*<$TIM>::ptr() };
+                        tim.bdtr().modify(|_,w| w.dtg().set(value));
+                    }
+                    fn read_dtg_value() -> u8 {
+                        let tim = unsafe { &*<$TIM>::ptr() };
+                        tim.bdtr().read().dtg().bits()
+                    }
+                    fn idle_state(c: u8, comp: bool, s: IdleState) {
+                        let tim = unsafe { &*<$TIM>::ptr() };
+                        if !comp {
+                            if c < Self::CH_NUMBER {
+                                unsafe { bb::write(tim.cr2(), c*2 + 8, s == IdleState::Set); }
+                            }
+                        } else {
+                            if c < Self::COMP_CH_NUMBER {
+                                unsafe { bb::write(tim.cr2(), c*2 + 9, s == IdleState::Set); }
+                            }
+                        }
+                    }
                 }
             )?
 
-            $(impl MasterTimer for $TIM {
-                type Mms = pac::$timbase::cr2::MMS_A;
-                fn master_mode(&mut self, mode: Self::Mms) {
-                    self.cr2.modify(|_,w| w.mms().variant(mode));
+            with_pwm!($TIM: $cnum $(, $aoe)?);
+            unsafe impl<const C: u8> PeriAddress for CCR<$TIM, C> {
+                #[inline(always)]
+                fn address(&self) -> u32 {
+                    self.0.ccr(C as usize).as_ptr() as u32
                 }
-            })?
-        )+
-    }
+
+                type MemSize = $bits;
+            }
+        )?
+
+        $(impl MasterTimer for $TIM {
+            type Mms = pac::$timbase::cr2::MMS;
+            fn master_mode(&mut self, mode: Self::Mms) {
+                self.cr2().modify(|_,w| w.mms().variant(mode));
+            }
+        })?
+    };
 }
+use hal;
 
 macro_rules! with_dmar {
     ($TIM:ty, $memsize:ty) => {
         unsafe impl PeriAddress for DMAR<$TIM> {
             #[inline(always)]
             fn address(&self) -> u32 {
-                &self.0.dmar as *const _ as u32
+                self.0.dmar().as_ptr() as u32
             }
 
             type MemSize = $memsize;
@@ -421,159 +614,57 @@ macro_rules! with_dmar {
 }
 
 macro_rules! with_pwm {
-    ($TIM:ty: CH1) => {
+    ($TIM:ty: [$($Cx:ident, $ccmrx_output:ident, $ocxpe:ident, $ocxm:ident;)+] $(, $aoe:ident)?) => {
         impl WithPwm for $TIM {
-            const CH_NUMBER: u8 = 1;
-
-            #[inline(always)]
-            fn read_cc_value(channel: u8) -> u32 {
-                let tim = unsafe { &*<$TIM>::ptr() };
-                tim.ccr[channel as usize].read().bits()
-            }
-
-            #[inline(always)]
-            fn set_cc_value(channel: u8, value: u32) {
-                let tim = unsafe { &*<$TIM>::ptr() };
-                #[allow(unused_unsafe)]
-                tim.ccr[channel as usize].write(|w| unsafe { w.bits(value) })
-            }
-
             #[inline(always)]
             fn preload_output_channel_in_mode(&mut self, channel: Channel, mode: Ocm) {
                 match channel {
-                    Channel::C1 => {
-                        self.ccmr1_output()
-                        .modify(|_, w| w.oc1pe().set_bit().oc1m().bits(mode as _) );
-                    }
+                    $(
+                        Channel::$Cx => {
+                            self.$ccmrx_output()
+                            .modify(|_, w| w.$ocxpe().set_bit().$ocxm().set(mode as _) );
+                        }
+                    )+
+                    #[allow(unreachable_patterns)]
                     _ => {},
                 }
             }
 
             #[inline(always)]
             fn start_pwm(&mut self) {
-                self.cr1.modify(|_, w| w.cen().set_bit());
-            }
-
-            #[inline(always)]
-            fn enable_channel(c: u8, b: bool) {
-                let tim = unsafe { &*<$TIM>::ptr() };
-                if c < Self::CH_NUMBER {
-                    unsafe { bb::write(&tim.ccer, c*4, b); }
-                }
+                $(let $aoe = self.bdtr().modify(|_, w| w.aoe().set_bit());)?
+                self.cr1().modify(|_, w| w.cen().set_bit());
             }
         }
     };
-    ($TIM:ty: CH2) => {
-        impl WithPwm for $TIM {
-            const CH_NUMBER: u8 = 2;
-
-            #[inline(always)]
-            fn read_cc_value(channel: u8) -> u32 {
-                let tim = unsafe { &*<$TIM>::ptr() };
-                tim.ccr[channel as usize].read().bits()
-            }
-
-            #[inline(always)]
-            fn set_cc_value(channel: u8, value: u32) {
-                let tim = unsafe { &*<$TIM>::ptr() };
-                #[allow(unused_unsafe)]
-                tim.ccr[channel as usize].write(|w| unsafe { w.bits(value) });
-            }
-
-            #[inline(always)]
-            fn preload_output_channel_in_mode(&mut self, channel: Channel, mode: Ocm) {
-                match channel {
-                    Channel::C1 => {
-                        self.ccmr1_output()
-                        .modify(|_, w| w.oc1pe().set_bit().oc1m().bits(mode as _) );
-                    }
-                    Channel::C2 => {
-                        self.ccmr1_output()
-                        .modify(|_, w| w.oc2pe().set_bit().oc2m().bits(mode as _) );
-                    }
-                    _ => {},
-                }
-            }
-
-            #[inline(always)]
-            fn start_pwm(&mut self) {
-                self.cr1.modify(|_, w| w.cen().set_bit());
-            }
-
-            #[inline(always)]
-            fn enable_channel(c: u8, b: bool) {
-                let tim = unsafe { &*<$TIM>::ptr() };
-                if c < Self::CH_NUMBER {
-                    unsafe { bb::write(&tim.ccer, c*4, b); }
-                }
-            }
-        }
+    ($TIM:ty: 1) => {
+        with_pwm!($TIM: [
+            C1, ccmr1_output, oc1pe, oc1m;
+        ]);
     };
-    ($TIM:ty: CH4 $(, $aoe:ident)?) => {
-        impl WithPwm for $TIM {
-            const CH_NUMBER: u8 = 4;
-
-            #[inline(always)]
-            fn read_cc_value(channel: u8) -> u32 {
-                let tim = unsafe { &*<$TIM>::ptr() };
-                tim.ccr[channel as usize].read().bits()
-            }
-
-            #[inline(always)]
-            fn set_cc_value(channel: u8, value: u32) {
-                let tim = unsafe { &*<$TIM>::ptr() };
-                #[allow(unused_unsafe)]
-                tim.ccr[channel as usize].write(|w| unsafe { w.bits(value) })
-            }
-
-            #[inline(always)]
-            fn preload_output_channel_in_mode(&mut self, channel: Channel, mode: Ocm) {
-                match channel {
-                    Channel::C1 => {
-                        self.ccmr1_output()
-                        .modify(|_, w| w.oc1pe().set_bit().oc1m().bits(mode as _) );
-                    }
-                    Channel::C2 => {
-                        self.ccmr1_output()
-                        .modify(|_, w| w.oc2pe().set_bit().oc2m().bits(mode as _) );
-                    }
-                    Channel::C3 => {
-                        self.ccmr2_output()
-                        .modify(|_, w| w.oc3pe().set_bit().oc3m().bits(mode as _) );
-                    }
-                    Channel::C4 => {
-                        self.ccmr2_output()
-                        .modify(|_, w| w.oc4pe().set_bit().oc4m().bits(mode as _) );
-                    }
-                }
-            }
-
-            #[inline(always)]
-            fn start_pwm(&mut self) {
-                $(let $aoe = self.bdtr.modify(|_, w| w.aoe().set_bit());)?
-                self.cr1.modify(|_, w| w.cen().set_bit());
-            }
-
-            #[inline(always)]
-            fn enable_channel(c: u8, b: bool) {
-                let tim = unsafe { &*<$TIM>::ptr() };
-                if c < Self::CH_NUMBER {
-                    unsafe { bb::write(&tim.ccer, c*4, b); }
-                }
-            }
-        }
-    }
+    ($TIM:ty: 2) => {
+        with_pwm!($TIM: [
+            C1, ccmr1_output, oc1pe, oc1m;
+            C2, ccmr1_output, oc2pe, oc2m;
+        ]);
+    };
+    ($TIM:ty: 4 $(, $aoe:ident)?) => {
+        with_pwm!($TIM: [
+            C1, ccmr1_output, oc1pe, oc1m;
+            C2, ccmr1_output, oc2pe, oc2m;
+            C3, ccmr2_output, oc3pe, oc3m;
+            C4, ccmr2_output, oc4pe, oc4m;
+        ] $(, $aoe)?);
+    };
 }
 
 impl<TIM: Instance> Timer<TIM> {
     /// Initialize timer
     pub fn new(tim: TIM, clocks: &Clocks) -> Self {
         unsafe {
-            //NOTE(unsafe) this reference will only be used for atomic writes with no side effects
-            let rcc = &(*RCC::ptr());
             // Enable and reset the timer peripheral
-            TIM::enable(rcc);
-            TIM::reset(rcc);
+            TIM::enable_unchecked();
+            TIM::reset_unchecked();
         }
 
         Self {
@@ -592,27 +683,6 @@ impl<TIM: Instance> Timer<TIM> {
 
     pub fn release(self) -> TIM {
         self.tim
-    }
-
-    /// Starts listening for an `event`
-    ///
-    /// Note, you will also have to enable the TIM2 interrupt in the NVIC to start
-    /// receiving events.
-    pub fn listen(&mut self, event: Event) {
-        self.tim.listen_interrupt(event, true);
-    }
-
-    /// Clears interrupt associated with `event`.
-    ///
-    /// If the interrupt is not cleared, it will immediately retrigger after
-    /// the ISR has finished.
-    pub fn clear_interrupt(&mut self, event: Event) {
-        self.tim.clear_interrupt_flag(event);
-    }
-
-    /// Stops listening for an `event`
-    pub fn unlisten(&mut self, event: Event) {
-        self.tim.listen_interrupt(event, false);
     }
 }
 
@@ -641,11 +711,9 @@ impl<TIM: Instance, const FREQ: u32> FTimer<TIM, FREQ> {
     /// Initialize timer
     pub fn new(tim: TIM, clocks: &Clocks) -> Self {
         unsafe {
-            //NOTE(unsafe) this reference will only be used for atomic writes with no side effects
-            let rcc = &(*RCC::ptr());
             // Enable and reset the timer peripheral
-            TIM::enable(rcc);
-            TIM::reset(rcc);
+            TIM::enable_unchecked();
+            TIM::reset_unchecked();
         }
 
         let mut t = Self { tim };
@@ -661,12 +729,12 @@ impl<TIM: Instance, const FREQ: u32> FTimer<TIM, FREQ> {
         self.tim.set_prescaler(u16::try_from(psc - 1).unwrap());
     }
 
-    /// Creates `Counter` that imlements [embedded_hal::timer::CountDown]
+    /// Creates `Counter` that implements [embedded_hal_02::timer::CountDown]
     pub fn counter(self) -> Counter<TIM, FREQ> {
         Counter(self)
     }
 
-    /// Creates `Delay` that imlements [embedded_hal::blocking::delay] traits
+    /// Creates `Delay` that implements [embedded_hal_02::blocking::delay] traits
     pub fn delay(self) -> Delay<TIM, FREQ> {
         Delay(self)
     }
@@ -674,31 +742,6 @@ impl<TIM: Instance, const FREQ: u32> FTimer<TIM, FREQ> {
     /// Releases the TIM peripheral
     pub fn release(self) -> TIM {
         self.tim
-    }
-
-    /// Starts listening for an `event`
-    ///
-    /// Note, you will also have to enable the TIM2 interrupt in the NVIC to start
-    /// receiving events.
-    pub fn listen(&mut self, event: Event) {
-        self.tim.listen_interrupt(event, true);
-    }
-
-    /// Clears interrupt associated with `event`.
-    ///
-    /// If the interrupt is not cleared, it will immediately retrigger after
-    /// the ISR has finished.
-    pub fn clear_interrupt(&mut self, event: Event) {
-        self.tim.clear_interrupt_flag(event);
-    }
-
-    pub fn get_interrupt(&mut self) -> Event {
-        self.tim.get_interrupt_flag()
-    }
-
-    /// Stops listening for an `event`
-    pub fn unlisten(&mut self, event: Event) {
-        self.tim.listen_interrupt(event, false);
     }
 }
 
@@ -716,40 +759,98 @@ pub(crate) const fn compute_arr_presc(freq: u32, clock: u32) -> (u16, u32) {
     (psc as u16, arr)
 }
 
-// All F4xx parts have these timers.
-hal!(
-    pac::TIM9: [Timer9, u16, c: (CH2),],
-    pac::TIM11: [Timer11, u16, c: (CH1),],
-);
+impl<TIM: Instance> crate::Listen for Timer<TIM> {
+    type Event = Event;
+    fn listen(&mut self, event: impl Into<BitFlags<Event>>) {
+        self.tim.listen_event(None, Some(event.into()));
+    }
+    fn listen_only(&mut self, event: impl Into<BitFlags<Event>>) {
+        self.tim
+            .listen_event(Some(BitFlags::ALL), Some(event.into()));
+    }
+    fn unlisten(&mut self, event: impl Into<BitFlags<Event>>) {
+        self.tim.listen_event(Some(event.into()), None);
+    }
+}
 
-// All parts except for F410 add these timers.
-#[cfg(not(feature = "stm32f410"))]
-hal!(
-    pac::TIM1: [Timer1, u16, dmar: u32, c: (CH4, _aoe), m: tim1,],
-    pac::TIM5: [Timer5, u32, dmar: u16, c: (CH4), m: tim5,],
-    pac::TIM2: [Timer2, u32, dmar: u16, c: (CH4), m: tim2,],
-    pac::TIM3: [Timer3, u16, dmar: u16, c: (CH4), m: tim3,],
-    pac::TIM4: [Timer4, u16, dmar: u16, c: (CH4), m: tim3,],
-    pac::TIM10: [Timer10, u16, c: (CH1),],
-);
+impl<TIM: Instance, const FREQ: u32> crate::Listen for FTimer<TIM, FREQ> {
+    type Event = Event;
+    fn listen(&mut self, event: impl Into<BitFlags<Event>>) {
+        self.tim.listen_event(None, Some(event.into()));
+    }
+    fn listen_only(&mut self, event: impl Into<BitFlags<Event>>) {
+        self.tim
+            .listen_event(Some(BitFlags::ALL), Some(event.into()));
+    }
+    fn unlisten(&mut self, event: impl Into<BitFlags<Event>>) {
+        self.tim.listen_event(Some(event.into()), None);
+    }
+}
+
+impl<TIM: Instance> crate::ClearFlags for Timer<TIM> {
+    type Flag = Flag;
+    fn clear_flags(&mut self, event: impl Into<BitFlags<Flag>>) {
+        self.tim.clear_interrupt_flag(event.into());
+    }
+}
+
+impl<TIM: Instance> crate::ReadFlags for Timer<TIM> {
+    type Flag = Flag;
+    fn flags(&self) -> BitFlags<Flag> {
+        self.tim.get_interrupt_flag()
+    }
+}
+
+impl<TIM: Instance, const FREQ: u32> crate::ClearFlags for FTimer<TIM, FREQ> {
+    type Flag = Flag;
+    fn clear_flags(&mut self, event: impl Into<BitFlags<Flag>>) {
+        self.tim.clear_interrupt_flag(event.into());
+    }
+}
+
+impl<TIM: Instance, const FREQ: u32> crate::ReadFlags for FTimer<TIM, FREQ> {
+    type Flag = Flag;
+    fn flags(&self) -> BitFlags<Flag> {
+        self.tim.get_interrupt_flag()
+    }
+}
+
+#[cfg(not(feature = "gpio-f410"))]
+#[cfg(feature = "tim1")]
+hal!(pac::TIM1: [Timer1, u16, dmar: u32, c: (4, _aoe), m: tim1,]);
+#[cfg(feature = "tim2")]
+hal!(pac::TIM2: [Timer2, u32, dmar: u16, c: (4), m: tim2,]);
+#[cfg(feature = "tim3")]
+hal!(pac::TIM3: [Timer3, u16, dmar: u16, c: (4), m: tim3,]);
+#[cfg(feature = "tim4")]
+hal!(pac::TIM4: [Timer4, u16, dmar: u16, c: (4), m: tim3,]);
+#[cfg(not(feature = "gpio-f410"))]
+#[cfg(feature = "tim5")]
+hal!(pac::TIM5: [Timer5, u32, dmar: u16, c: (4), m: tim5,]);
 
 // TIM5 on F410 is 16-bit
-#[cfg(feature = "stm32f410")]
-hal!(
-    pac::TIM1: [Timer1, u16, dmar: u16, c: (CH4, _aoe), m: tim1,],
-    pac::TIM5: [Timer5, u16, dmar: u16, c: (CH4), m: tim5,],
-);
+#[cfg(feature = "gpio-f410")]
+#[cfg(feature = "tim1")]
+hal!(pac::TIM1: [Timer1, u16, dmar: u16, c: (4, _aoe), m: tim1,]);
+#[cfg(feature = "gpio-f410")]
+#[cfg(feature = "tim5")]
+hal!(pac::TIM5: [Timer5, u16, dmar: u16, c: (4), m: tim5,]);
 
-// All parts except F401 and F411.
-#[cfg(not(any(feature = "stm32f401", feature = "stm32f411",)))]
-hal!(pac::TIM6: [Timer6, u16, m: tim6,],);
-
-// All parts except F401, F410, F411.
-#[cfg(not(any(feature = "stm32f401", feature = "stm32f410", feature = "stm32f411",)))]
-hal!(
-    pac::TIM7: [Timer7, u16, m: tim7,],
-    pac::TIM8: [Timer8, u16, dmar: u32, c: (CH4, _aoe), m: tim8,],
-    pac::TIM12: [Timer12, u16, c: (CH2),],
-    pac::TIM13: [Timer13, u16, c: (CH1),],
-    pac::TIM14: [Timer14, u16, c: (CH1),],
-);
+#[cfg(feature = "tim6")]
+hal!(pac::TIM6: [Timer6, u16, m: tim6,]);
+#[cfg(feature = "tim7")]
+hal!(pac::TIM7: [Timer7, u16, m: tim7,]);
+#[cfg(feature = "tim8")]
+hal!(pac::TIM8: [Timer8, u16, dmar: u32, c: (4, _aoe), m: tim8,]);
+#[cfg(feature = "tim9")]
+hal!(pac::TIM9: [Timer9, u16, c: (2),]);
+#[cfg(feature = "tim10")]
+hal!(pac::TIM10: [Timer10, u16, c: (1),]);
+#[cfg(feature = "tim11")]
+hal!(pac::TIM11: [Timer11, u16, c: (1),]);
+#[cfg(feature = "tim12")]
+hal!(pac::TIM12: [Timer12, u16, c: (2),]);
+#[cfg(feature = "tim13")]
+hal!(pac::TIM13: [Timer13, u16, c: (1),]);
+#[cfg(feature = "tim14")]
+hal!(pac::TIM14: [Timer14, u16, c: (1),]);

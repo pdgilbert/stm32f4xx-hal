@@ -25,12 +25,12 @@ use core::slice::Iter;
 use cortex_m_rt::entry;
 use panic_semihosting as _;
 
-use embedded_graphics::pixelcolor::Rgb565;
-use embedded_graphics::prelude::*;
+use embedded_graphics_07::pixelcolor::Rgb565;
+use embedded_graphics_07::prelude::*;
 
-use embedded_graphics::primitives::{Circle, PrimitiveStyle};
+use embedded_graphics_07::primitives::{Circle, PrimitiveStyle};
 use st7789::ST7789;
-use stm32f4xx_hal::fsmc_lcd::{ChipSelect1, FsmcLcd, LcdPins, Timing};
+use stm32f4xx_hal::fsmc_lcd::{DataPins16, FsmcLcd, LcdPins, Timing};
 use stm32f4xx_hal::pac::{CorePeripherals, Peripherals};
 use stm32f4xx_hal::prelude::*;
 
@@ -50,30 +50,18 @@ fn main() -> ! {
     let gpiof = dp.GPIOF.split();
 
     // Pins connected to the LCD on the 32F412GDISCOVERY board
-    let lcd_pins = LcdPins {
-        data: (
-            gpiod.pd14.into_alternate(),
-            gpiod.pd15.into_alternate(),
-            gpiod.pd0.into_alternate(),
-            gpiod.pd1.into_alternate(),
-            gpioe.pe7.into_alternate(),
-            gpioe.pe8.into_alternate(),
-            gpioe.pe9.into_alternate(),
-            gpioe.pe10.into_alternate(),
-            gpioe.pe11.into_alternate(),
-            gpioe.pe12.into_alternate(),
-            gpioe.pe13.into_alternate(),
-            gpioe.pe14.into_alternate(),
-            gpioe.pe15.into_alternate(),
-            gpiod.pd8.into_alternate(),
-            gpiod.pd9.into_alternate(),
-            gpiod.pd10.into_alternate(),
+    use stm32f4xx_hal::gpio::alt::fsmc as alt;
+    let lcd_pins = LcdPins::new(
+        DataPins16::new(
+            gpiod.pd14, gpiod.pd15, gpiod.pd0, gpiod.pd1, gpioe.pe7, gpioe.pe8, gpioe.pe9,
+            gpioe.pe10, gpioe.pe11, gpioe.pe12, gpioe.pe13, gpioe.pe14, gpioe.pe15, gpiod.pd8,
+            gpiod.pd9, gpiod.pd10,
         ),
-        address: gpiof.pf0.into_alternate(),
-        read_enable: gpiod.pd4.into_alternate(),
-        write_enable: gpiod.pd5.into_alternate(),
-        chip_select: ChipSelect1(gpiod.pd7.into_alternate()),
-    };
+        alt::Address::from(gpiof.pf0),
+        gpiod.pd4,
+        gpiod.pd5,
+        alt::ChipSelect1::from(gpiod.pd7),
+    );
     let lcd_reset = gpiod.pd11.into_push_pull_output();
     let backlight_control = gpiof.pf5.into_push_pull_output();
 
@@ -136,7 +124,7 @@ fn main() -> ! {
     let mut drawer = ColoredCircleDrawer::new(&center_points, &test_colors);
     loop {
         drawer.draw(&mut lcd).unwrap();
-        delay.delay_ms(100u16);
+        delay.delay_ms(100);
     }
 }
 

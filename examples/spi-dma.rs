@@ -3,14 +3,16 @@
 
 // Halt on panic
 use panic_halt as _;
+use stm32f4xx_hal::dma::DmaFlag;
 
 use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
 use cortex_m_rt::entry;
-use embedded_hal::spi::{Mode, Phase, Polarity};
+use embedded_hal_02::spi::{Mode, Phase, Polarity};
 use stm32f4xx_hal::pac::interrupt;
 use stm32f4xx_hal::{
-    dma::{config, traits::StreamISR, MemoryToPeripheral, Stream4, StreamsTuple, Transfer},
+    dma::{config, MemoryToPeripheral, Stream4, StreamsTuple, Transfer},
+    gpio::Speed,
     pac,
     prelude::*,
     spi::*,
@@ -39,15 +41,22 @@ fn main() -> ! {
         let stream = steams.4;
 
         let gpiob = dp.GPIOB.split();
-        let pb15 = gpiob.pb15.into_alternate().internal_pull_up(true);
-        let pb13 = gpiob.pb13.into_alternate();
+
+        // Note. We set GPIO speed as VeryHigh to it corresponds to SPI frequency 3MHz.
+        // Otherwise it may lead to the 'wrong last bit in every received byte' problem.
+        let pb15 = gpiob
+            .pb15
+            .into_alternate()
+            .speed(Speed::VeryHigh)
+            .internal_pull_up(true);
+        let pb13 = gpiob.pb13.into_alternate().speed(Speed::VeryHigh);
 
         let mode = Mode {
             polarity: Polarity::IdleLow,
             phase: Phase::CaptureOnFirstTransition,
         };
 
-        let spi2 = Spi::new(dp.SPI2, (pb13, NoMiso {}, pb15), mode, 3.MHz(), &clocks);
+        let spi2 = Spi::new(dp.SPI2, (pb13, NoMiso::new(), pb15), mode, 3.MHz(), &clocks);
 
         let buffer = cortex_m::singleton!(: [u8; ARRAY_SIZE] = [1; ARRAY_SIZE]).unwrap();
 
@@ -92,12 +101,10 @@ fn DMA2_STREAM4() {
         cortex_m::interrupt::free(|cs| G_TRANSFER.borrow(cs).replace(None).unwrap())
     });
 
+    let flags = transfer.flags();
     // Its important to clear fifo errors as the transfer is paused until it is cleared
-    if Stream4::<pac::DMA1>::get_fifo_error_flag() {
-        transfer.clear_fifo_error_interrupt();
-    }
-    if Stream4::<pac::DMA1>::get_transfer_complete_flag() {
-        transfer.clear_transfer_complete_interrupt();
+    transfer.clear_flags(DmaFlag::FifoError | DmaFlag::TransferComplete);
+    if flags.is_transfer_complete() {
         unsafe {
             static mut BUFFER: [u8; ARRAY_SIZE] = [0; ARRAY_SIZE];
             for (i, b) in BUFFER.iter_mut().enumerate() {

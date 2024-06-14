@@ -1,4 +1,5 @@
 use super::*;
+use embedded_hal::digital::ErrorKind;
 
 /// Pin type with dynamic mode
 ///
@@ -30,6 +31,12 @@ pub enum PinModeError {
     IncorrectMode,
 }
 
+impl embedded_hal::digital::Error for PinModeError {
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Other
+    }
+}
+
 impl Dynamic {
     /// Is pin in readable mode
     pub fn is_input(&self) -> bool {
@@ -50,7 +57,7 @@ impl Dynamic {
     }
 }
 
-// For convertion simplify
+// For conversion simplify
 struct Unknown;
 
 impl crate::Sealed for Unknown {}

@@ -7,113 +7,6 @@ impl<const P: char, const N: u8, const A: u8> Pin<P, N, Alternate<A, PushPull>> 
     }
 }
 
-impl<const P: char, const N: u8, MODE: PinMode + marker::NotAlt, const A: u8, Otype>
-    From<Pin<P, N, MODE>> for Pin<P, N, Alternate<A, Otype>>
-where
-    Alternate<A, Otype>: PinMode,
-    Self: marker::IntoAf<A>,
-{
-    #[inline(always)]
-    fn from(f: Pin<P, N, MODE>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8, const A: u8, const B: u8> From<Pin<P, N, Alternate<B, PushPull>>>
-    for Pin<P, N, Alternate<A, OpenDrain>>
-where
-    Self: marker::IntoAf<A>,
-{
-    #[inline(always)]
-    fn from(f: Pin<P, N, Alternate<B, PushPull>>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8, Otype> From<Pin<P, N, Output<Otype>>> for Pin<P, N, Input>
-where
-    Output<Otype>: PinMode,
-{
-    #[inline(always)]
-    fn from(f: Pin<P, N, Output<Otype>>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8> From<Pin<P, N, Analog>> for Pin<P, N, Input> {
-    #[inline(always)]
-    fn from(f: Pin<P, N, Analog>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8, const A: u8, Otype, MODE> From<Pin<P, N, Alternate<A, Otype>>>
-    for Pin<P, N, MODE>
-where
-    Alternate<A, Otype>: PinMode,
-    MODE: PinMode + marker::NotAlt,
-{
-    #[inline(always)]
-    fn from(f: Pin<P, N, Alternate<A, Otype>>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8, Otype> From<Pin<P, N, Input>> for Pin<P, N, Output<Otype>>
-where
-    Output<Otype>: PinMode,
-{
-    #[inline(always)]
-    fn from(f: Pin<P, N, Input>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8, Otype> From<Pin<P, N, Analog>> for Pin<P, N, Output<Otype>>
-where
-    Output<Otype>: PinMode,
-{
-    #[inline(always)]
-    fn from(f: Pin<P, N, Analog>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8> From<Pin<P, N, Output<PushPull>>>
-    for Pin<P, N, Output<OpenDrain>>
-{
-    #[inline(always)]
-    fn from(f: Pin<P, N, Output<PushPull>>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8> From<Pin<P, N, Output<OpenDrain>>>
-    for Pin<P, N, Output<PushPull>>
-{
-    #[inline(always)]
-    fn from(f: Pin<P, N, Output<OpenDrain>>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8> From<Pin<P, N, Input>> for Pin<P, N, Analog> {
-    #[inline(always)]
-    fn from(f: Pin<P, N, Input>) -> Self {
-        f.into_mode()
-    }
-}
-
-impl<const P: char, const N: u8, Otype> From<Pin<P, N, Output<Otype>>> for Pin<P, N, Analog>
-where
-    Output<Otype>: PinMode,
-{
-    #[inline(always)]
-    fn from(f: Pin<P, N, Output<Otype>>) -> Self {
-        f.into_mode()
-    }
-}
-
 impl<const P: char, const N: u8, MODE: PinMode> Pin<P, N, MODE> {
     /// Configures the pin to operate alternate mode
     pub fn into_alternate<const A: u8>(self) -> Pin<P, N, Alternate<A, PushPull>>
@@ -204,38 +97,7 @@ impl<const P: char, const N: u8, MODE: PinMode> Pin<P, N, MODE> {
     /// ensure they use this properly.
     #[inline(always)]
     pub(super) fn mode<M: PinMode>(&mut self) {
-        let offset = 2 * N;
-        unsafe {
-            if MODE::OTYPER != M::OTYPER {
-                if let Some(otyper) = M::OTYPER {
-                    (*Gpio::<P>::ptr())
-                        .otyper
-                        .modify(|r, w| w.bits(r.bits() & !(0b1 << N) | (otyper << N)));
-                }
-            }
-
-            if MODE::AFR != M::AFR {
-                if let Some(afr) = M::AFR {
-                    if N < 8 {
-                        let offset2 = 4 * { N };
-                        (*Gpio::<P>::ptr()).afrl.modify(|r, w| {
-                            w.bits((r.bits() & !(0b1111 << offset2)) | (afr << offset2))
-                        });
-                    } else {
-                        let offset2 = 4 * { N - 8 };
-                        (*Gpio::<P>::ptr()).afrh.modify(|r, w| {
-                            w.bits((r.bits() & !(0b1111 << offset2)) | (afr << offset2))
-                        });
-                    }
-                }
-            }
-
-            if MODE::MODER != M::MODER {
-                (*Gpio::<P>::ptr())
-                    .moder
-                    .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (M::MODER << offset)));
-            }
-        }
+        change_mode!((*gpiox::<P>()), N);
     }
 
     #[inline(always)]
@@ -243,6 +105,76 @@ impl<const P: char, const N: u8, MODE: PinMode> Pin<P, N, MODE> {
     pub fn into_mode<M: PinMode>(mut self) -> Pin<P, N, M> {
         self.mode::<M>();
         Pin::new()
+    }
+}
+
+macro_rules! change_mode {
+    ($block:expr, $N:ident) => {
+        let offset = 2 * $N;
+        unsafe {
+            if MODE::OTYPER != M::OTYPER {
+                if let Some(otyper) = M::OTYPER {
+                    $block
+                        .otyper()
+                        .modify(|r, w| w.bits(r.bits() & !(0b1 << $N) | (otyper << $N)));
+                }
+            }
+
+            if MODE::AFR != M::AFR {
+                if let Some(afr) = M::AFR {
+                    if $N < 8 {
+                        let offset2 = 4 * { $N };
+                        $block.afrl().modify(|r, w| {
+                            w.bits((r.bits() & !(0b1111 << offset2)) | (afr << offset2))
+                        });
+                    } else {
+                        let offset2 = 4 * { $N - 8 };
+                        $block.afrh().modify(|r, w| {
+                            w.bits((r.bits() & !(0b1111 << offset2)) | (afr << offset2))
+                        });
+                    }
+                }
+            }
+
+            if MODE::MODER != M::MODER {
+                $block
+                    .moder()
+                    .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (M::MODER << offset)));
+            }
+        }
+    };
+}
+use change_mode;
+
+use super::ErasedPin;
+impl<MODE: PinMode> ErasedPin<MODE> {
+    #[inline(always)]
+    pub(super) fn mode<M: PinMode>(&mut self) {
+        let n = self.pin_id();
+        change_mode!(self.block(), n);
+    }
+
+    #[inline(always)]
+    /// Converts pin into specified mode
+    pub fn into_mode<M: PinMode>(mut self) -> ErasedPin<M> {
+        self.mode::<M>();
+        ErasedPin::from_pin_port(self.into_pin_port())
+    }
+}
+
+use super::PartiallyErasedPin;
+impl<const P: char, MODE: PinMode> PartiallyErasedPin<P, MODE> {
+    #[inline(always)]
+    pub(super) fn mode<M: PinMode>(&mut self) {
+        let n = self.pin_id();
+        change_mode!((*gpiox::<P>()), n);
+    }
+
+    #[inline(always)]
+    /// Converts pin into specified mode
+    pub fn into_mode<M: PinMode>(mut self) -> PartiallyErasedPin<P, M> {
+        self.mode::<M>();
+        PartiallyErasedPin::new(self.i)
     }
 }
 

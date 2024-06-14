@@ -36,14 +36,11 @@ fn main() -> ! {
 
     let gpioa = dp.GPIOA.split();
 
-    let usb = USB {
-        usb_global: dp.OTG_FS_GLOBAL,
-        usb_device: dp.OTG_FS_DEVICE,
-        usb_pwrclk: dp.OTG_FS_PWRCLK,
-        pin_dm: gpioa.pa11.into_alternate(),
-        pin_dp: gpioa.pa12.into_alternate(),
-        hclk: clocks.hclk(),
-    };
+    let usb = USB::new(
+        (dp.OTG_FS_GLOBAL, dp.OTG_FS_DEVICE, dp.OTG_FS_PWRCLK),
+        (gpioa.pa11, gpioa.pa12),
+        &clocks,
+    );
 
     *USB_BUS = Some(stm32f4xx_hal::otg_fs::UsbBusType::new(usb, EP_MEMORY));
     let usb_bus = USB_BUS.as_ref().unwrap();
@@ -53,10 +50,12 @@ fn main() -> ! {
 
         *G_USB_DEVICE.borrow(cs).borrow_mut() = Some(
             UsbDeviceBuilder::new(usb_bus, UsbVidPid(0x16c0, 0x27dd))
-                .manufacturer("Fake company")
-                .product("Serial port")
-                .serial_number("TEST")
                 .device_class(usbd_serial::USB_CLASS_CDC)
+                .strings(&[StringDescriptors::default()
+                    .manufacturer("Fake Company")
+                    .product("Product")
+                    .serial_number("TEST")])
+                .unwrap()
                 .build(),
         );
     });
@@ -65,6 +64,7 @@ fn main() -> ! {
         cortex_m::peripheral::NVIC::unmask(Interrupt::OTG_FS);
     }
 
+    #[allow(clippy::empty_loop)]
     loop {
         // Do nothing. Everything is done in the IRQ handler
     }

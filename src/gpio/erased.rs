@@ -1,6 +1,6 @@
 use super::*;
 
-pub type EPin<MODE> = ErasedPin<MODE>;
+pub use ErasedPin as EPin;
 
 /// Fully erased pin
 ///
@@ -49,6 +49,15 @@ impl<MODE> PinExt for ErasedPin<MODE> {
 }
 
 impl<MODE> ErasedPin<MODE> {
+    pub(crate) fn from_pin_port(pin_port: u8) -> Self {
+        Self {
+            pin_port,
+            _mode: PhantomData,
+        }
+    }
+    pub(crate) fn into_pin_port(self) -> u8 {
+        self.pin_port
+    }
     pub(crate) fn new(port: u8, pin: u8) -> Self {
         Self {
             pin_port: port << 4 | pin,
@@ -56,8 +65,15 @@ impl<MODE> ErasedPin<MODE> {
         }
     }
 
+    /// Convert type erased pin to `Pin` with fixed type
+    pub fn restore<const P: char, const N: u8>(self) -> Pin<P, N, MODE> {
+        assert_eq!(self.port_id(), P as u8 - b'A');
+        assert_eq!(self.pin_id(), N);
+        Pin::new()
+    }
+
     #[inline]
-    fn block(&self) -> &crate::pac::gpioa::RegisterBlock {
+    pub(crate) fn block(&self) -> &crate::pac::gpioa::RegisterBlock {
         // This function uses pointer arithmetic instead of branching to be more efficient
 
         // The logic relies on the following assumptions:
@@ -82,7 +98,7 @@ impl<MODE> ErasedPin<Output<MODE>> {
     #[inline(always)]
     pub fn set_high(&mut self) {
         // NOTE(unsafe) atomic write to a stateless register
-        unsafe { self.block().bsrr.write(|w| w.bits(1 << self.pin_id())) };
+        unsafe { self.block().bsrr().write(|w| w.bits(1 << self.pin_id())) };
     }
 
     /// Drives the pin low
@@ -91,7 +107,7 @@ impl<MODE> ErasedPin<Output<MODE>> {
         // NOTE(unsafe) atomic write to a stateless register
         unsafe {
             self.block()
-                .bsrr
+                .bsrr()
                 .write(|w| w.bits(1 << (self.pin_id() + 16)))
         };
     }
@@ -124,7 +140,7 @@ impl<MODE> ErasedPin<Output<MODE>> {
     /// Is the pin in drive low mode?
     #[inline(always)]
     pub fn is_set_low(&self) -> bool {
-        self.block().odr.read().bits() & (1 << self.pin_id()) == 0
+        self.block().odr().read().bits() & (1 << self.pin_id()) == 0
     }
 
     /// Toggle pin output
@@ -151,6 +167,6 @@ where
     /// Is the input pin low?
     #[inline(always)]
     pub fn is_low(&self) -> bool {
-        self.block().idr.read().bits() & (1 << self.pin_id()) == 0
+        self.block().idr().read().bits() & (1 << self.pin_id()) == 0
     }
 }

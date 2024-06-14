@@ -1,5 +1,125 @@
 //! Analog to digital converter configuration.
-//! According to CubeMx, all STM32F4 chips use the same ADC IP so this should be correct for all variants.
+//!
+//! # Status
+//! Most options relating to regular conversions are implemented. One-shot and sequences of conversions
+//! have been tested and work as expected.
+//!
+//! GPIO to channel mapping should be correct for all supported F4 devices. The mappings were taken from
+//! CubeMX. The mappings are feature gated per 4xx device but there are actually sub variants for some
+//! devices and some pins may be missing on some variants. The implementation has been split up and commented
+//! to show which pins are available on certain device variants but currently the library doesn't enforce this.
+//! To fully support the right pins would require 10+ more features for the various variants.
+//! ## Todo
+//! * Injected conversions
+//! * Analog watchdog config
+//! * Discontinuous mode
+//! # Examples
+//! ## One-shot conversion
+//! ```
+//! use stm32f4xx_hal::{
+//!   gpio::gpioa,
+//!   adc::{
+//!     Adc,
+//!     config::{AdcConfig, SampleTime},
+//!   },
+//! };
+//!
+//! let mut adc = Adc::adc1(device.ADC1, true, AdcConfig::default());
+//! let pa3 = gpioa.pa3.into_analog();
+//! let sample = adc.convert(&pa3, SampleTime::Cycles_480);
+//! let millivolts = adc.sample_to_millivolts(sample);
+//! info!("pa3: {}mV", millivolts);
+//! ```
+//!
+//! ## Sequence conversion
+//! ```
+//! use stm32f4xx_hal::{
+//!   gpio::gpioa,
+//!   adc::{
+//!     Adc,
+//!     config::{AdcConfig, SampleTime, Sequence, Eoc, Scan, Clock},
+//!   },
+//! };
+//!
+//! let config = AdcConfig::default()
+//!     //We'll either need DMA or an interrupt per conversion to convert
+//!     //multiple values in a sequence
+//!     .end_of_conversion_interrupt(Eoc::Conversion)
+//!     //Scan mode is also required to convert a sequence
+//!     .scan(Scan::Enabled)
+//!     //And since we're looking for one interrupt per conversion the
+//!     //clock will need to be fairly slow to avoid overruns breaking
+//!     //the sequence. If you are running in debug mode and logging in
+//!     //the interrupt, good luck... try setting pclk2 really low.
+//!     //(Better yet use DMA)
+//!     .clock(Clock::Pclk2_div_8);
+//! let mut adc = Adc::adc1(device.ADC1, true, config);
+//! let pa0 = gpioa.pa0.into_analog();
+//! let pa3 = gpioa.pa3.into_analog();
+//! adc.configure_channel(&pa0, Sequence::One, SampleTime::Cycles_112);
+//! adc.configure_channel(&pa3, Sequence::Two, SampleTime::Cycles_480);
+//! adc.configure_channel(&pa0, Sequence::Three, SampleTime::Cycles_112);
+//! adc.start_conversion();
+//! ```
+//!
+//! ## External trigger
+//!
+//! A common mistake on STM forums is enabling continuous mode but that causes it to start
+//! capturing on the first trigger and capture as fast as possible forever, regardless of
+//! future triggers. Continuous mode is disabled by default but I thought it was worth
+//! highlighting.
+//!
+//! Getting the timer config right to make sure it's sending the event the ADC is listening
+//! to can be a bit of a pain but the key fields are highlighted below. Try hooking a timer
+//! channel up to an external pin with an LED or oscilloscope attached to check it's really
+//! generating pulses if the ADC doesn't seem to be triggering.
+//! ```
+//! use stm32f4xx_hal::{
+//!   gpio::gpioa,
+//!   adc::{
+//!     Adc,
+//!     config::{AdcConfig, SampleTime, Sequence, Eoc, Scan, Clock},
+//!   },
+//! };
+//!
+//!  let config = AdcConfig::default()
+//!      //Set the trigger you want
+//!      .external_trigger(TriggerMode::RisingEdge, ExternalTrigger::Tim_1_cc_1);
+//!  let mut adc = Adc::adc1(device.ADC1, true, config);
+//!  let pa0 = gpioa.pa0.into_analog();
+//!  adc.configure_channel(&pa0, Sequence::One, SampleTime::Cycles_112);
+//!  //Make sure it's enabled but don't start the conversion
+//!  adc.enable();
+//!
+//! //Configure the timer
+//! let mut tim = Timer::tim1(device.TIM1, 1.hz(), clocks);
+//! unsafe {
+//!     let tim = &(*TIM1::ptr());
+//!
+//!     //Channel 1
+//!     //Disable the channel before configuring it
+//!     tim.ccer().modify(|_, w| w.cc1e().clear_bit());
+//!
+//!     tim.ccmr1_output().modify(|_, w| w
+//!       //Preload enable for channel
+//!       .oc1pe().set_bit()
+//!
+//!       //Set mode for channel, the default mode is "frozen" which won't work
+//!       .oc1m().pwm_mode1()
+//!     );
+//!
+//!     //Set the duty cycle, 0 won't work in pwm mode but might be ok in
+//!     //toggle mode or match mode
+//!     let max_duty = tim.arr.read().arr().bits() as u16;
+//!     tim.ccr1.modify(|_, w| w.ccr().bits(max_duty / 2));
+//!
+//!     //Enable the channel
+//!     tim.ccer.modify(|_, w| w.cc1e().set_bit());
+//!
+//!     //Enable the TIM main Output
+//!     tim.bdtr.modify(|_, w| w.moe().set_bit());
+//! }
+//! ```
 
 #![deny(missing_docs)]
 
@@ -8,7 +128,8 @@
     Temperature in °C = (110-30) * (adc_sample - VtempCal30::get().read()) / (VtempCal110::get().read()-VtempCal30::get().read()) + 30
 */
 
-use crate::dma::traits::{PeriAddress, SafePeripheralRead};
+use crate::dma::traits::{DMASet, PeriAddress, SafePeripheralRead};
+use crate::dma::PeripheralToMemory;
 use crate::rcc::{Enable, Reset};
 use crate::{
     gpio::{self, Analog},
@@ -17,6 +138,8 @@ use crate::{
     signature::VDDA_CALIB,
 };
 use core::fmt;
+
+mod f4;
 
 /// Vref internal signal, used for calibration
 pub struct Vref;
@@ -27,77 +150,50 @@ pub struct Vbat;
 /// Core temperature internal signal
 pub struct Temperature;
 
-macro_rules! adc_pins {
-    ($($pin:ty => ($adc:ident, $chan:expr)),+ $(,)*) => {
-        $(
-            impl embedded_hal::adc::Channel<pac::$adc> for $pin {
-                type ID = u8;
-                fn channel() -> u8 { $chan }
-            }
-        )+
-    };
-}
-
 /// Contains types related to ADC configuration
 pub mod config {
     /// The place in the sequence a given channel should be captured
     #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+    #[repr(u8)]
     pub enum Sequence {
         /// 1
-        One,
+        One = 0,
         /// 2
-        Two,
+        Two = 1,
         /// 3
-        Three,
+        Three = 2,
         /// 4
-        Four,
+        Four = 3,
         /// 5
-        Five,
+        Five = 4,
         /// 6
-        Six,
+        Six = 5,
         /// 7
-        Seven,
+        Seven = 6,
         /// 8
-        Eight,
+        Eight = 7,
         /// 9
-        Nine,
+        Nine = 8,
         /// 10
-        Ten,
+        Ten = 9,
         /// 11
-        Eleven,
+        Eleven = 10,
         /// 12
-        Twelve,
+        Twelve = 11,
         /// 13
-        Thirteen,
+        Thirteen = 12,
         /// 14
-        Fourteen,
+        Fourteen = 13,
         /// 15
-        Fifteen,
+        Fifteen = 14,
         /// 16
-        Sixteen,
+        Sixteen = 15,
     }
 
     impl From<Sequence> for u8 {
         fn from(s: Sequence) -> u8 {
-            match s {
-                Sequence::One => 0,
-                Sequence::Two => 1,
-                Sequence::Three => 2,
-                Sequence::Four => 3,
-                Sequence::Five => 4,
-                Sequence::Six => 5,
-                Sequence::Seven => 6,
-                Sequence::Eight => 7,
-                Sequence::Nine => 8,
-                Sequence::Ten => 9,
-                Sequence::Eleven => 10,
-                Sequence::Twelve => 11,
-                Sequence::Thirteen => 12,
-                Sequence::Fourteen => 13,
-                Sequence::Fifteen => 14,
-                Sequence::Sixteen => 15,
-            }
+            s as _
         }
     }
 
@@ -128,23 +224,24 @@ pub mod config {
     /// The number of cycles to sample a given channel for
     #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+    #[repr(u8)]
     pub enum SampleTime {
         /// 3 cycles
-        Cycles_3,
+        Cycles_3 = 0,
         /// 15 cycles
-        Cycles_15,
+        Cycles_15 = 1,
         /// 28 cycles
-        Cycles_28,
+        Cycles_28 = 2,
         /// 56 cycles
-        Cycles_56,
+        Cycles_56 = 3,
         /// 84 cycles
-        Cycles_84,
+        Cycles_84 = 4,
         /// 112 cycles
-        Cycles_112,
+        Cycles_112 = 5,
         /// 144 cycles
-        Cycles_144,
+        Cycles_144 = 6,
         /// 480 cycles
-        Cycles_480,
+        Cycles_480 = 7,
     }
 
     impl From<u8> for SampleTime {
@@ -165,16 +262,7 @@ pub mod config {
 
     impl From<SampleTime> for u8 {
         fn from(l: SampleTime) -> u8 {
-            match l {
-                SampleTime::Cycles_3 => 0,
-                SampleTime::Cycles_15 => 1,
-                SampleTime::Cycles_28 => 2,
-                SampleTime::Cycles_56 => 3,
-                SampleTime::Cycles_84 => 4,
-                SampleTime::Cycles_112 => 5,
-                SampleTime::Cycles_144 => 6,
-                SampleTime::Cycles_480 => 7,
-            }
+            l as _
         }
     }
 
@@ -182,127 +270,101 @@ pub mod config {
     /// Check the datasheet for the maximum speed the ADC supports
     #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+    #[repr(u8)]
     pub enum Clock {
         /// PCLK2 (APB2) divided by 2
-        Pclk2_div_2,
+        Pclk2_div_2 = 0,
         /// PCLK2 (APB2) divided by 4
-        Pclk2_div_4,
+        Pclk2_div_4 = 1,
         /// PCLK2 (APB2) divided by 6
-        Pclk2_div_6,
+        Pclk2_div_6 = 2,
         /// PCLK2 (APB2) divided by 8
-        Pclk2_div_8,
+        Pclk2_div_8 = 3,
     }
 
     impl From<Clock> for u8 {
         fn from(c: Clock) -> u8 {
-            match c {
-                Clock::Pclk2_div_2 => 0,
-                Clock::Pclk2_div_4 => 1,
-                Clock::Pclk2_div_6 => 2,
-                Clock::Pclk2_div_8 => 3,
-            }
+            c as _
         }
     }
 
     /// Resolution to sample at
     #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+    #[repr(u8)]
     pub enum Resolution {
         /// 12-bit
-        Twelve,
+        Twelve = 0,
         /// 10-bit
-        Ten,
+        Ten = 1,
         /// 8-bit
-        Eight,
+        Eight = 2,
         /// 6-bit
-        Six,
+        Six = 3,
     }
     impl From<Resolution> for u8 {
         fn from(r: Resolution) -> u8 {
-            match r {
-                Resolution::Twelve => 0,
-                Resolution::Ten => 1,
-                Resolution::Eight => 2,
-                Resolution::Six => 3,
-            }
+            r as _
         }
     }
 
     /// Possible external triggers the ADC can listen to
     #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+    #[repr(u8)]
     pub enum ExternalTrigger {
         /// TIM1 compare channel 1
-        Tim_1_cc_1,
+        Tim_1_cc_1 = 0b0000,
         /// TIM1 compare channel 2
-        Tim_1_cc_2,
+        Tim_1_cc_2 = 0b0001,
         /// TIM1 compare channel 3
-        Tim_1_cc_3,
+        Tim_1_cc_3 = 0b0010,
         /// TIM2 compare channel 2
-        Tim_2_cc_2,
+        Tim_2_cc_2 = 0b0011,
         /// TIM2 compare channel 3
-        Tim_2_cc_3,
+        Tim_2_cc_3 = 0b0100,
         /// TIM2 compare channel 4
-        Tim_2_cc_4,
+        Tim_2_cc_4 = 0b0101,
         /// TIM2 trigger out
-        Tim_2_trgo,
+        Tim_2_trgo = 0b0110,
         /// TIM3 compare channel 1
-        Tim_3_cc_1,
+        Tim_3_cc_1 = 0b0111,
         /// TIM3 trigger out
-        Tim_3_trgo,
+        Tim_3_trgo = 0b1000,
         /// TIM4 compare channel 4
-        Tim_4_cc_4,
+        Tim_4_cc_4 = 0b1001,
         /// TIM5 compare channel 1
-        Tim_5_cc_1,
+        Tim_5_cc_1 = 0b1010,
         /// TIM5 compare channel 2
-        Tim_5_cc_2,
+        Tim_5_cc_2 = 0b1011,
         /// TIM5 compare channel 3
-        Tim_5_cc_3,
-        /// External interupt line 11
-        Exti_11,
+        Tim_5_cc_3 = 0b1100,
+        /// External interrupt line 11
+        Exti_11 = 0b1111,
     }
     impl From<ExternalTrigger> for u8 {
         fn from(et: ExternalTrigger) -> u8 {
-            match et {
-                ExternalTrigger::Tim_1_cc_1 => 0b0000,
-                ExternalTrigger::Tim_1_cc_2 => 0b0001,
-                ExternalTrigger::Tim_1_cc_3 => 0b0010,
-                ExternalTrigger::Tim_2_cc_2 => 0b0011,
-                ExternalTrigger::Tim_2_cc_3 => 0b0100,
-                ExternalTrigger::Tim_2_cc_4 => 0b0101,
-                ExternalTrigger::Tim_2_trgo => 0b0110,
-                ExternalTrigger::Tim_3_cc_1 => 0b0111,
-                ExternalTrigger::Tim_3_trgo => 0b1000,
-                ExternalTrigger::Tim_4_cc_4 => 0b1001,
-                ExternalTrigger::Tim_5_cc_1 => 0b1010,
-                ExternalTrigger::Tim_5_cc_2 => 0b1011,
-                ExternalTrigger::Tim_5_cc_3 => 0b1100,
-                ExternalTrigger::Exti_11 => 0b1111,
-            }
+            et as _
         }
     }
 
     /// Possible trigger modes
     #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+    #[repr(u8)]
     pub enum TriggerMode {
         /// Don't listen to external trigger
-        Disabled,
+        Disabled = 0,
         /// Listen for rising edges of external trigger
-        RisingEdge,
+        RisingEdge = 1,
         /// Listen for falling edges of external trigger
-        FallingEdge,
+        FallingEdge = 2,
         /// Listen for both rising and falling edges of external trigger
-        BothEdges,
+        BothEdges = 3,
     }
     impl From<TriggerMode> for u8 {
         fn from(tm: TriggerMode) -> u8 {
-            match tm {
-                TriggerMode::Disabled => 0,
-                TriggerMode::RisingEdge => 1,
-                TriggerMode::FallingEdge => 2,
-                TriggerMode::BothEdges => 3,
-            }
+            tm as _
         }
     }
 
@@ -482,137 +544,6 @@ pub mod config {
 }
 
 /// Analog to Digital Converter
-/// # Status
-/// Most options relating to regular conversions are implemented. One-shot and sequences of conversions
-/// have been tested and work as expected.
-///
-/// GPIO to channel mapping should be correct for all supported F4 devices. The mappings were taken from
-/// CubeMX. The mappings are feature gated per 4xx device but there are actually sub variants for some
-/// devices and some pins may be missing on some variants. The implementation has been split up and commented
-/// to show which pins are available on certain device variants but currently the library doesn't enforce this.
-/// To fully support the right pins would require 10+ more features for the various variants.
-/// ## Todo
-/// * Injected conversions
-/// * Analog watchdog config
-/// * Discontinuous mode
-/// # Examples
-/// ## One-shot conversion
-/// ```
-/// use stm32f4xx_hal::{
-///   gpio::gpioa,
-///   adc::{
-///     Adc,
-///     config::AdcConfig,
-///     config::SampleTime,
-///   },
-/// };
-///
-/// let mut adc = Adc::adc1(device.ADC1, true, AdcConfig::default());
-/// let pa3 = gpioa.pa3.into_analog();
-/// let sample = adc.convert(&pa3, SampleTime::Cycles_480);
-/// let millivolts = adc.sample_to_millivolts(sample);
-/// info!("pa3: {}mV", millivolts);
-/// ```
-///
-/// ## Sequence conversion
-/// ```
-/// use stm32f4xx_hal::{
-///   gpio::gpioa,
-///   adc::{
-///     Adc,
-///     config::AdcConfig,
-///     config::SampleTime,
-///     config::Sequence,
-///     config::Eoc,
-///     config::Scan,
-///     config::Clock,
-///   },
-/// };
-///
-/// let config = AdcConfig::default()
-///     //We'll either need DMA or an interrupt per conversion to convert
-///     //multiple values in a sequence
-///     .end_of_conversion_interrupt(Eoc::Conversion)
-///     //Scan mode is also required to convert a sequence
-///     .scan(Scan::Enabled)
-///     //And since we're looking for one interrupt per conversion the
-///     //clock will need to be fairly slow to avoid overruns breaking
-///     //the sequence. If you are running in debug mode and logging in
-///     //the interrupt, good luck... try setting pclk2 really low.
-///     //(Better yet use DMA)
-///     .clock(Clock::Pclk2_div_8);
-/// let mut adc = Adc::adc1(device.ADC1, true, config);
-/// let pa0 = gpioa.pa0.into_analog();
-/// let pa3 = gpioa.pa3.into_analog();
-/// adc.configure_channel(&pa0, Sequence::One, SampleTime::Cycles_112);
-/// adc.configure_channel(&pa3, Sequence::Two, SampleTime::Cycles_480);
-/// adc.configure_channel(&pa0, Sequence::Three, SampleTime::Cycles_112);
-/// adc.start_conversion();
-/// ```
-///
-/// ## External trigger
-///
-/// A common mistake on STM forums is enabling continuous mode but that causes it to start
-/// capturing on the first trigger and capture as fast as possible forever, regardless of
-/// future triggers. Continuous mode is disabled by default but I thought it was worth
-/// highlighting.
-///
-/// Getting the timer config right to make sure it's sending the event the ADC is listening
-/// to can be a bit of a pain but the key fields are highlighted below. Try hooking a timer
-/// channel up to an external pin with an LED or oscilloscope attached to check it's really
-/// generating pulses if the ADC doesn't seem to be triggering.
-/// ```
-/// use stm32f4xx_hal::{
-///   gpio::gpioa,
-///   adc::{
-///     Adc,
-///     config::AdcConfig,
-///     config::SampleTime,
-///     config::Sequence,
-///     config::Eoc,
-///     config::Scan,
-///     config::Clock,
-///   },
-/// };
-///
-///  let config = AdcConfig::default()
-///      //Set the trigger you want
-///      .external_trigger(TriggerMode::RisingEdge, ExternalTrigger::Tim_1_cc_1);
-///  let mut adc = Adc::adc1(device.ADC1, true, config);
-///  let pa0 = gpioa.pa0.into_analog();
-///  adc.configure_channel(&pa0, Sequence::One, SampleTime::Cycles_112);
-///  //Make sure it's enabled but don't start the conversion
-///  adc.enable();
-///
-/// //Configure the timer
-/// let mut tim = Timer::tim1(device.TIM1, 1.hz(), clocks);
-/// unsafe {
-///     let tim = &(*TIM1::ptr());
-///
-///     //Channel 1
-///     //Disable the channel before configuring it
-///     tim.ccer.modify(|_, w| w.cc1e().clear_bit());
-///
-///     tim.ccmr1_output().modify(|_, w| w
-///       //Preload enable for channel
-///       .oc1pe().set_bit()
-///
-///       //Set mode for channel, the default mode is "frozen" which won't work
-///       .oc1m().pwm_mode1()
-///     );
-///
-///     //Set the duty cycle, 0 won't work in pwm mode but might be ok in
-///     //toggle mode or match mode
-///     let max_duty = tim.arr.read().arr().bits() as u16;
-///     tim.ccr1.modify(|_, w| w.ccr().bits(max_duty / 2));
-///
-///     //Enable the channel
-///     tim.ccer.modify(|_, w| w.cc1e().set_bit());
-///
-///     //Enable the TIM main Output
-///     tim.bdtr.modify(|_, w| w.moe().set_bit());
-/// }
-/// ```
 #[derive(Clone, Copy)]
 pub struct Adc<ADC> {
     /// Current config of the ADC, kept up to date by the various set methods
@@ -660,7 +591,7 @@ macro_rules! adc {
         pub fn enable_vbat(&self) {
             unsafe {
                 let common = &(*pac::$common_type::ptr());
-                common.ccr.modify(|_, w| w.vbate().set_bit());
+                common.ccr().modify(|_, w| w.vbate().set_bit());
             }
         }
 
@@ -668,7 +599,7 @@ macro_rules! adc {
         pub fn disable_vbat(&self) {
             unsafe {
                 let common = &(*pac::$common_type::ptr());
-                common.ccr.modify(|_, w| w.vbate().clear_bit());
+                common.ccr().modify(|_, w| w.vbate().clear_bit());
             }
         }
 
@@ -679,7 +610,7 @@ macro_rules! adc {
             self.disable_vbat();
             unsafe {
                 let common = &(*pac::$common_type::ptr());
-                common.ccr.modify(|_, w| w.tsvrefe().set_bit());
+                common.ccr().modify(|_, w| w.tsvrefe().set_bit());
             }
         }
 
@@ -687,7 +618,7 @@ macro_rules! adc {
         pub fn disable_temperature_and_vref(&mut self) {
             unsafe {
                 let common = &(*pac::$common_type::ptr());
-                common.ccr.modify(|_, w| w.tsvrefe().clear_bit());
+                common.ccr().modify(|_, w| w.tsvrefe().clear_bit());
             }
         }
 
@@ -695,7 +626,7 @@ macro_rules! adc {
         pub fn temperature_and_vref_enabled(&mut self) -> bool {
             unsafe {
                 let common = &(*pac::$common_type::ptr());
-                common.ccr.read().tsvrefe().bit_is_set()
+                common.ccr().read().tsvrefe().bit_is_set()
             }
         }
     };
@@ -772,12 +703,12 @@ macro_rules! adc {
 
                 /// Returns if the adc is enabled
                 pub fn is_enabled(&self) -> bool {
-                    self.adc_reg.cr2.read().adon().bit_is_set()
+                    self.adc_reg.cr2().read().adon().bit_is_set()
                 }
 
                 /// Enables the adc
                 pub fn enable(&mut self) {
-                    self.adc_reg.cr2.modify(|_, w| w.adon().set_bit());
+                    self.adc_reg.cr2().modify(|_, w| w.adon().set_bit());
                 }
 
                 /// Disables the adc
@@ -787,7 +718,7 @@ macro_rules! adc {
                 /// the ADC before changing them. The reference manual for the chip I'm using only states
                 /// that the sequence registers are locked when they are being converted.
                 pub fn disable(&mut self) {
-                    self.adc_reg.cr2.modify(|_, w| w.adon().clear_bit());
+                    self.adc_reg.cr2().modify(|_, w| w.adon().clear_bit());
                 }
 
                 /// Starts conversion sequence. Waits for the hardware to indicate it's actually started.
@@ -795,9 +726,9 @@ macro_rules! adc {
                     self.enable();
                     self.clear_end_of_conversion_flag();
                     //Start conversion
-                    self.adc_reg.cr2.modify(|_, w| w.swstart().set_bit());
+                    self.adc_reg.cr2().modify(|_, w| w.swstart().set_bit());
 
-                    while !self.adc_reg.sr.read().strt().bit_is_set() {}
+                    while !self.adc_reg.sr().read().strt().bit_is_set() {}
                 }
 
                 /// Sets the clock for the adc
@@ -805,7 +736,7 @@ macro_rules! adc {
                     self.config.clock = clock;
                     unsafe {
                         let common = &(*pac::$common_type::ptr());
-                        common.ccr.modify(|_, w| w.adcpre().bits(clock.into()));
+                        common.ccr().modify(|_, w| w.adcpre().bits(clock as _));
                     }
                 }
 
@@ -818,19 +749,19 @@ macro_rules! adc {
                         config::Resolution::Six => (1 << 6),
                     };
                     self.config.resolution = resolution;
-                    self.adc_reg.cr1.modify(|_, w| w.res().bits(resolution.into()));
+                    self.adc_reg.cr1().modify(|_, w| w.res().set(resolution as _));
                 }
 
                 /// Sets the DR register alignment to left or right
                 pub fn set_align(&mut self, align: config::Align) {
                     self.config.align = align;
-                    self.adc_reg.cr2.modify(|_, w| w.align().bit(align.into()));
+                    self.adc_reg.cr2().modify(|_, w| w.align().bit(align.into()));
                 }
 
                 /// Enables and disables scan mode
                 pub fn set_scan(&mut self, scan: config::Scan) {
                     self.config.scan = scan;
-                    self.adc_reg.cr1.modify(|_, w| w.scan().bit(scan.into()));
+                    self.adc_reg.cr1().modify(|_, w| w.scan().bit(scan.into()));
                 }
 
                 /// Sets which external trigger to use and if it is disabled, rising, falling or both
@@ -841,25 +772,25 @@ macro_rules! adc {
                         feature = "stm32f410",
                         feature = "stm32f411",
                     ))] // TODO: fix pac
-                    self.adc_reg.cr2.modify(|_, w| unsafe { w
-                        .extsel().bits(extsel.into())
-                        .exten().bits(edge.into())
+                    self.adc_reg.cr2().modify(|_, w| unsafe { w
+                        .extsel().bits(extsel as _)
+                        .exten().bits(edge as _)
                     });
                     #[cfg(not(any(
                         feature = "stm32f401",
                         feature = "stm32f410",
                         feature = "stm32f411",
                     )))]
-                    self.adc_reg.cr2.modify(|_, w| w
-                        .extsel().bits(extsel.into())
-                        .exten().bits(edge.into())
+                    self.adc_reg.cr2().modify(|_, w| w
+                        .extsel().set(extsel as _)
+                        .exten().set(edge as _)
                     );
                 }
 
                 /// Enables and disables continuous mode
                 pub fn set_continuous(&mut self, continuous: config::Continuous) {
                     self.config.continuous = continuous;
-                    self.adc_reg.cr2.modify(|_, w| w.cont().bit(continuous.into()));
+                    self.adc_reg.cr2().modify(|_, w| w.cont().bit(continuous.into()));
                 }
 
                 /// Sets DMA to disabled, single or continuous
@@ -870,7 +801,7 @@ macro_rules! adc {
                         config::Dma::Single => (false, true),
                         config::Dma::Continuous => (true, true),
                     };
-                    self.adc_reg.cr2.modify(|_, w| w
+                    self.adc_reg.cr2().modify(|_, w| w
                         //DDS stands for "DMA disable selection"
                         //0 means do one DMA then stop
                         //1 means keep sending DMA requests as long as DMA=1
@@ -888,13 +819,13 @@ macro_rules! adc {
                         config::Eoc::Conversion => (true, true),
                         config::Eoc::Sequence => (true, false),
                     };
-                    self.adc_reg.cr1.modify(|_, w| w.eocie().bit(en));
-                    self.adc_reg.cr2.modify(|_, w| w.eocs().bit(eocs));
+                    self.adc_reg.cr1().modify(|_, w| w.eocie().bit(en));
+                    self.adc_reg.cr2().modify(|_, w| w.eocs().bit(eocs));
                 }
 
                 /// Resets the end-of-conversion flag
                 pub fn clear_end_of_conversion_flag(&mut self) {
-                    self.adc_reg.sr.modify(|_, w| w.eoc().clear_bit());
+                    self.adc_reg.sr().modify(|_, w| w.eoc().clear_bit());
                 }
 
                 /// Sets the default sample time that is used for one-shot conversions.
@@ -906,18 +837,18 @@ macro_rules! adc {
 
                 /// Returns the current sequence length. Primarily useful for configuring DMA.
                 pub fn sequence_length(&mut self) -> u8 {
-                    self.adc_reg.sqr1.read().l().bits() + 1
+                    self.adc_reg.sqr1().read().l().bits() + 1
                 }
 
                 /// Reset the sequence
                 pub fn reset_sequence(&mut self) {
                     //The reset state is One conversion selected
-                    self.adc_reg.sqr1.modify(|_, w| w.l().bits(config::Sequence::One.into()));
+                    self.adc_reg.sqr1().modify(|_, w| w.l().set(config::Sequence::One.into()));
                 }
 
                 /// Returns the address of the ADC data register. Primarily useful for configuring DMA.
                 pub fn data_register_address(&mut self) -> u32 {
-                    &self.adc_reg.dr as *const _ as u32
+                    self.adc_reg.dr().as_ptr() as u32
                 }
 
                 /// Configure a channel for sampling.
@@ -929,13 +860,13 @@ macro_rules! adc {
                 /// to sample for at a given ADC clock frequency
                 pub fn configure_channel<CHANNEL>(&mut self, _channel: &CHANNEL, sequence: config::Sequence, sample_time: config::SampleTime)
                 where
-                    CHANNEL: embedded_hal::adc::Channel<pac::$adc_type, ID=u8>
+                    CHANNEL: embedded_hal_02::adc::Channel<pac::$adc_type, ID=u8>
                 {
                     //Check the sequence is long enough
-                    self.adc_reg.sqr1.modify(|r, w| {
+                    self.adc_reg.sqr1().modify(|r, w| {
                         let prev: config::Sequence = r.l().bits().into();
                         if prev < sequence {
-                            w.l().bits(sequence.into())
+                            w.l().set(sequence.into())
                         } else {
                             w
                         }
@@ -945,22 +876,22 @@ macro_rules! adc {
 
                     //Set the channel in the right sequence field
                     match sequence {
-                        config::Sequence::One      => self.adc_reg.sqr3.modify(|_, w| unsafe {w.sq1().bits(channel) }),
-                        config::Sequence::Two      => self.adc_reg.sqr3.modify(|_, w| unsafe {w.sq2().bits(channel) }),
-                        config::Sequence::Three    => self.adc_reg.sqr3.modify(|_, w| unsafe {w.sq3().bits(channel) }),
-                        config::Sequence::Four     => self.adc_reg.sqr3.modify(|_, w| unsafe {w.sq4().bits(channel) }),
-                        config::Sequence::Five     => self.adc_reg.sqr3.modify(|_, w| unsafe {w.sq5().bits(channel) }),
-                        config::Sequence::Six      => self.adc_reg.sqr3.modify(|_, w| unsafe {w.sq6().bits(channel) }),
-                        config::Sequence::Seven    => self.adc_reg.sqr2.modify(|_, w| unsafe {w.sq7().bits(channel) }),
-                        config::Sequence::Eight    => self.adc_reg.sqr2.modify(|_, w| unsafe {w.sq8().bits(channel) }),
-                        config::Sequence::Nine     => self.adc_reg.sqr2.modify(|_, w| unsafe {w.sq9().bits(channel) }),
-                        config::Sequence::Ten      => self.adc_reg.sqr2.modify(|_, w| unsafe {w.sq10().bits(channel) }),
-                        config::Sequence::Eleven   => self.adc_reg.sqr2.modify(|_, w| unsafe {w.sq11().bits(channel) }),
-                        config::Sequence::Twelve   => self.adc_reg.sqr2.modify(|_, w| unsafe {w.sq12().bits(channel) }),
-                        config::Sequence::Thirteen => self.adc_reg.sqr1.modify(|_, w| unsafe {w.sq13().bits(channel) }),
-                        config::Sequence::Fourteen => self.adc_reg.sqr1.modify(|_, w| unsafe {w.sq14().bits(channel) }),
-                        config::Sequence::Fifteen  => self.adc_reg.sqr1.modify(|_, w| unsafe {w.sq15().bits(channel) }),
-                        config::Sequence::Sixteen  => self.adc_reg.sqr1.modify(|_, w| unsafe {w.sq16().bits(channel) }),
+                        config::Sequence::One      => self.adc_reg.sqr3().modify(|_, w| unsafe {w.sq1().bits(channel) }),
+                        config::Sequence::Two      => self.adc_reg.sqr3().modify(|_, w| unsafe {w.sq2().bits(channel) }),
+                        config::Sequence::Three    => self.adc_reg.sqr3().modify(|_, w| unsafe {w.sq3().bits(channel) }),
+                        config::Sequence::Four     => self.adc_reg.sqr3().modify(|_, w| unsafe {w.sq4().bits(channel) }),
+                        config::Sequence::Five     => self.adc_reg.sqr3().modify(|_, w| unsafe {w.sq5().bits(channel) }),
+                        config::Sequence::Six      => self.adc_reg.sqr3().modify(|_, w| unsafe {w.sq6().bits(channel) }),
+                        config::Sequence::Seven    => self.adc_reg.sqr2().modify(|_, w| unsafe {w.sq7().bits(channel) }),
+                        config::Sequence::Eight    => self.adc_reg.sqr2().modify(|_, w| unsafe {w.sq8().bits(channel) }),
+                        config::Sequence::Nine     => self.adc_reg.sqr2().modify(|_, w| unsafe {w.sq9().bits(channel) }),
+                        config::Sequence::Ten      => self.adc_reg.sqr2().modify(|_, w| unsafe {w.sq10().bits(channel) }),
+                        config::Sequence::Eleven   => self.adc_reg.sqr2().modify(|_, w| unsafe {w.sq11().bits(channel) }),
+                        config::Sequence::Twelve   => self.adc_reg.sqr2().modify(|_, w| unsafe {w.sq12().bits(channel) }),
+                        config::Sequence::Thirteen => self.adc_reg.sqr1().modify(|_, w| unsafe {w.sq13().bits(channel) }),
+                        config::Sequence::Fourteen => self.adc_reg.sqr1().modify(|_, w| unsafe {w.sq14().bits(channel) }),
+                        config::Sequence::Fifteen  => self.adc_reg.sqr1().modify(|_, w| unsafe {w.sq15().bits(channel) }),
+                        config::Sequence::Sixteen  => self.adc_reg.sqr1().modify(|_, w| unsafe {w.sq16().bits(channel) }),
                     }
 
                     fn replace_bits(mut v: u32, offset: u32, width: u32, value: u32) -> u32 {
@@ -971,19 +902,18 @@ macro_rules! adc {
                     }
 
                     //Set the sample time for the channel
-                    let st = u8::from(sample_time);
-                    let st = u32::from(st);
-                    let ch = u32::from(channel);
+                    let st = sample_time as u32;
+                    let ch = channel as u32;
                     match channel {
-                        0..=9   => self.adc_reg.smpr2.modify(|r, w| unsafe { w.bits(replace_bits(r.bits(), ch, 3, st)) }),
-                        10..=18 => self.adc_reg.smpr1.modify(|r, w| unsafe { w.bits(replace_bits(r.bits(), ch-10, 3, st)) }),
+                        0..=9   => self.adc_reg.smpr2().modify(|r, w| unsafe { w.bits(replace_bits(r.bits(), ch, 3, st)) }),
+                        10..=18 => self.adc_reg.smpr1().modify(|r, w| unsafe { w.bits(replace_bits(r.bits(), ch-10, 3, st)) }),
                         _ => unimplemented!(),
                     }
                 }
 
                 /// Returns the current sample stored in the ADC data register
                 pub fn current_sample(&self) -> u16 {
-                    self.adc_reg.dr.read().data().bits()
+                    self.adc_reg.dr().read().data().bits()
                 }
 
                 /// Converts a sample value to millivolts using calibrated VDDA and configured resolution.
@@ -995,7 +925,7 @@ macro_rules! adc {
 
                 /// Make a converter for samples to millivolts
                 pub fn make_sample_to_millivolts(&self) -> impl Fn(u16)->u16 {
-                    let calibrated_vdda= self.calibrated_vdda;
+                    let calibrated_vdda = self.calibrated_vdda;
                     let max_sample=self.max_sample;
                     move |sample| {
                      ((u32::from(sample) * calibrated_vdda) / max_sample) as u16
@@ -1011,27 +941,27 @@ macro_rules! adc {
                 /// # Panics
                 /// Will panic if there is no conversion started and the end-of-conversion bit is not set
                 pub fn wait_for_conversion_sequence(&self) {
-                    if !self.adc_reg.sr.read().strt().bit_is_set() && !self.adc_reg.sr.read().eoc().bit_is_set() {
+                    if !self.adc_reg.sr().read().strt().bit_is_set() && !self.adc_reg.sr().read().eoc().bit_is_set() {
                         panic!("Waiting for end-of-conversion but no conversion started");
                     }
-                    while !self.adc_reg.sr.read().eoc().bit_is_set() {}
+                    while !self.adc_reg.sr().read().eoc().bit_is_set() {}
                     //Clear the conversion started flag
-                    self.adc_reg.sr.modify(|_, w| w.strt().clear_bit());
+                    self.adc_reg.sr().modify(|_, w| w.strt().clear_bit());
                 }
 
                 /// Synchronously convert a single sample
                 /// Note that it reconfigures the adc sequence and doesn't restore it
                 pub fn convert<PIN>(&mut self, pin: &PIN, sample_time: config::SampleTime) -> u16
                 where
-                    PIN: embedded_hal::adc::Channel<pac::$adc_type, ID=u8>
+                    PIN: embedded_hal_02::adc::Channel<pac::$adc_type, ID=u8>
                 {
-                    self.adc_reg.cr2.modify(|_, w| w
+                    self.adc_reg.cr2().modify(|_, w| w
                         .dma().clear_bit() //Disable dma
                         .cont().clear_bit() //Disable continuous mode
-                        .exten().bits(config::TriggerMode::Disabled.into()) //Disable trigger
+                        .exten().set(config::TriggerMode::Disabled.into()) //Disable trigger
                         .eocs().clear_bit() //EOC is set at the end of the sequence
                     );
-                    self.adc_reg.cr1.modify(|_, w| w
+                    self.adc_reg.cr1().modify(|_, w| w
                         .scan().clear_bit() //Disable scan mode
                         .eocie().clear_bit() //Disable end of conversion interrupt
                     );
@@ -1056,7 +986,7 @@ macro_rules! adc {
 
             impl Adc<pac::$adc_type> {
                 fn read<PIN>(&mut self, pin: &mut PIN) -> nb::Result<u16, ()>
-                    where PIN: embedded_hal::adc::Channel<pac::$adc_type, ID=u8>,
+                    where PIN: embedded_hal_02::adc::Channel<pac::$adc_type, ID=u8>,
                 {
                     let enabled = self.is_enabled();
                     if !enabled {
@@ -1073,9 +1003,9 @@ macro_rules! adc {
                 }
             }
 
-            impl<PIN> embedded_hal::adc::OneShot<pac::$adc_type, u16, PIN> for Adc<pac::$adc_type>
+            impl<PIN> embedded_hal_02::adc::OneShot<pac::$adc_type, u16, PIN> for Adc<pac::$adc_type>
             where
-                PIN: embedded_hal::adc::Channel<pac::$adc_type, ID=u8>,
+                PIN: embedded_hal_02::adc::Channel<pac::$adc_type, ID=u8>,
             {
                 type Error = ();
 
@@ -1087,13 +1017,18 @@ macro_rules! adc {
             unsafe impl PeriAddress for Adc<pac::$adc_type> {
                 #[inline(always)]
                 fn address(&self) -> u32 {
-                    &self.adc_reg.dr as *const _ as u32
+                    self.adc_reg.dr().as_ptr() as u32
                 }
 
                 type MemSize = u16;
             }
         )+
     };
+}
+
+unsafe impl<ADC, STREAM, const CHANNEL: u8> DMASet<STREAM, CHANNEL, PeripheralToMemory> for Adc<ADC> where
+    ADC: DMASet<STREAM, CHANNEL, PeripheralToMemory>
+{
 }
 
 adc!(ADC1 => (adc1, ADC_COMMON, 8));
@@ -1103,546 +1038,3 @@ adc!(ADC2 => (adc2, ADC_COMMON, 9));
 
 #[cfg(feature = "adc3")]
 adc!(ADC3 => (adc3, ADC_COMMON, 10));
-
-#[cfg(feature = "stm32f401")]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    Temperature => (ADC1, 16),
-    Vbat => (ADC1, 18),
-    Vref => (ADC1, 17),
-);
-
-// Not available on C variant
-#[cfg(feature = "stm32f401")]
-adc_pins!(
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-);
-
-#[cfg(any(feature = "stm32f405", feature = "stm32f415"))]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA0<Analog> => (ADC2, 0),
-    gpio::PA0<Analog> => (ADC3, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA1<Analog> => (ADC2, 1),
-    gpio::PA1<Analog> => (ADC3, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA2<Analog> => (ADC2, 2),
-    gpio::PA2<Analog> => (ADC3, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA3<Analog> => (ADC2, 3),
-    gpio::PA3<Analog> => (ADC3, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA4<Analog> => (ADC2, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA5<Analog> => (ADC2, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA6<Analog> => (ADC2, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PA7<Analog> => (ADC2, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB0<Analog> => (ADC2, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    gpio::PB1<Analog> => (ADC2, 9),
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC0<Analog> => (ADC2, 10),
-    gpio::PC0<Analog> => (ADC3, 10),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC2<Analog> => (ADC2, 12),
-    gpio::PC2<Analog> => (ADC3, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC3<Analog> => (ADC2, 13),
-    gpio::PC3<Analog> => (ADC3, 13),
-    Temperature => (ADC1, 16),
-    Temperature => (ADC2, 16),
-    Temperature => (ADC3, 16),
-    Vbat => (ADC1, 18),
-    Vbat => (ADC2, 18),
-    Vbat => (ADC3, 18),
-    Vref => (ADC1, 17),
-    Vref => (ADC2, 17),
-    Vref => (ADC3, 17),
-);
-
-// Not available on O variant
-#[cfg(any(feature = "stm32f405", feature = "stm32f415"))]
-adc_pins!(
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC1<Analog> => (ADC2, 11),
-    gpio::PC1<Analog> => (ADC3, 11),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC4<Analog> => (ADC2, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-    gpio::PC5<Analog> => (ADC2, 15),
-    gpio::PF10<Analog> => (ADC3, 8),
-    gpio::PF3<Analog> => (ADC3, 9),
-    gpio::PF4<Analog> => (ADC3, 14),
-    gpio::PF5<Analog> => (ADC3, 15),
-    gpio::PF6<Analog> => (ADC3, 4),
-    gpio::PF7<Analog> => (ADC3, 5),
-    gpio::PF8<Analog> => (ADC3, 6),
-    gpio::PF9<Analog> => (ADC3, 7),
-);
-
-#[cfg(any(feature = "stm32f407", feature = "stm32f417"))]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA0<Analog> => (ADC2, 0),
-    gpio::PA0<Analog> => (ADC3, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA1<Analog> => (ADC2, 1),
-    gpio::PA1<Analog> => (ADC3, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA2<Analog> => (ADC2, 2),
-    gpio::PA2<Analog> => (ADC3, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA3<Analog> => (ADC2, 3),
-    gpio::PA3<Analog> => (ADC3, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA4<Analog> => (ADC2, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA5<Analog> => (ADC2, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA6<Analog> => (ADC2, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PA7<Analog> => (ADC2, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB0<Analog> => (ADC2, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    gpio::PB1<Analog> => (ADC2, 9),
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC0<Analog> => (ADC2, 10),
-    gpio::PC0<Analog> => (ADC3, 10),
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC1<Analog> => (ADC2, 11),
-    gpio::PC1<Analog> => (ADC3, 11),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC2<Analog> => (ADC2, 12),
-    gpio::PC2<Analog> => (ADC3, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC3<Analog> => (ADC2, 13),
-    gpio::PC3<Analog> => (ADC3, 13),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC4<Analog> => (ADC2, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-    gpio::PC5<Analog> => (ADC2, 15),
-    Temperature => (ADC1, 16),
-    Temperature => (ADC2, 16),
-    Temperature => (ADC3, 16),
-    Vbat => (ADC1, 18),
-    Vbat => (ADC2, 18),
-    Vbat => (ADC3, 18),
-    Vref => (ADC1, 17),
-    Vref => (ADC2, 17),
-    Vref => (ADC3, 17),
-);
-
-// Not available on V variant
-#[cfg(any(feature = "stm32f407", feature = "stm32f417"))]
-adc_pins!(
-    gpio::PF10<Analog> => (ADC3, 8),
-    gpio::PF3<Analog> => (ADC3, 9),
-    gpio::PF4<Analog> => (ADC3, 14),
-    gpio::PF5<Analog> => (ADC3, 15),
-    gpio::PF6<Analog> => (ADC3, 4),
-    gpio::PF7<Analog> => (ADC3, 5),
-    gpio::PF8<Analog> => (ADC3, 6),
-    gpio::PF9<Analog> => (ADC3, 7),
-);
-
-#[cfg(feature = "stm32f410")]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA5<Analog> => (ADC1, 5),
-    Temperature => (ADC1, 18),
-    Vbat => (ADC1, 16),
-    Vref => (ADC1, 17),
-);
-
-// Not available on T variant
-#[cfg(feature = "stm32f410")]
-adc_pins!(
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-);
-
-// Only available on R variant
-#[cfg(feature = "stm32f410")]
-adc_pins!(
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-);
-
-#[cfg(feature = "stm32f411")]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    Temperature => (ADC1, 16),
-    Vbat => (ADC1, 18),
-    Vref => (ADC1, 17),
-);
-
-// Not available on C variant
-#[cfg(feature = "stm32f411")]
-adc_pins!(
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-);
-
-#[cfg(feature = "stm32f412")]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-    Temperature => (ADC1, 18),
-    Vbat => (ADC1, 18),
-    Vref => (ADC1, 17),
-);
-
-#[cfg(any(feature = "stm32f413", feature = "stm32f423"))]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    Temperature => (ADC1, 18),
-    Vbat => (ADC1, 18),
-    Vref => (ADC1, 17),
-);
-
-// Not available on C variant
-#[cfg(any(feature = "stm32f413", feature = "stm32f423"))]
-adc_pins!(
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-);
-
-#[cfg(any(feature = "stm32f427", feature = "stm32f437"))]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA0<Analog> => (ADC2, 0),
-    gpio::PA0<Analog> => (ADC3, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA1<Analog> => (ADC2, 1),
-    gpio::PA1<Analog> => (ADC3, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA2<Analog> => (ADC2, 2),
-    gpio::PA2<Analog> => (ADC3, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA3<Analog> => (ADC2, 3),
-    gpio::PA3<Analog> => (ADC3, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA4<Analog> => (ADC2, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA5<Analog> => (ADC2, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA6<Analog> => (ADC2, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PA7<Analog> => (ADC2, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB0<Analog> => (ADC2, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    gpio::PB1<Analog> => (ADC2, 9),
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC0<Analog> => (ADC2, 10),
-    gpio::PC0<Analog> => (ADC3, 10),
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC1<Analog> => (ADC2, 11),
-    gpio::PC1<Analog> => (ADC3, 11),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC2<Analog> => (ADC2, 12),
-    gpio::PC2<Analog> => (ADC3, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC3<Analog> => (ADC2, 13),
-    gpio::PC3<Analog> => (ADC3, 13),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC4<Analog> => (ADC2, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-    gpio::PC5<Analog> => (ADC2, 15),
-    Temperature => (ADC1, 18),
-    Vbat => (ADC1, 18),
-    Vref => (ADC1, 17),
-);
-
-// Not available on V variant
-#[cfg(any(feature = "stm32f427", feature = "stm32f437"))]
-adc_pins!(
-    gpio::PF10<Analog> => (ADC3, 8),
-    gpio::PF3<Analog> => (ADC3, 9),
-    gpio::PF4<Analog> => (ADC3, 14),
-    gpio::PF5<Analog> => (ADC3, 15),
-);
-
-// Only available on I and Z variants
-#[cfg(any(feature = "stm32f427", feature = "stm32f437"))]
-adc_pins!(
-    gpio::PF6<Analog> => (ADC3, 4),
-    gpio::PF7<Analog> => (ADC3, 5),
-    gpio::PF8<Analog> => (ADC3, 6),
-    gpio::PF9<Analog> => (ADC3, 7),
-);
-
-#[cfg(any(feature = "stm32f429", feature = "stm32f439"))]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA0<Analog> => (ADC2, 0),
-    gpio::PA0<Analog> => (ADC3, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA1<Analog> => (ADC2, 1),
-    gpio::PA1<Analog> => (ADC3, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA2<Analog> => (ADC2, 2),
-    gpio::PA2<Analog> => (ADC3, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA3<Analog> => (ADC2, 3),
-    gpio::PA3<Analog> => (ADC3, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA4<Analog> => (ADC2, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA5<Analog> => (ADC2, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA6<Analog> => (ADC2, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PA7<Analog> => (ADC2, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB0<Analog> => (ADC2, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    gpio::PB1<Analog> => (ADC2, 9),
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC0<Analog> => (ADC2, 10),
-    gpio::PC0<Analog> => (ADC3, 10),
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC1<Analog> => (ADC2, 11),
-    gpio::PC1<Analog> => (ADC3, 11),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC2<Analog> => (ADC2, 12),
-    gpio::PC2<Analog> => (ADC3, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC3<Analog> => (ADC2, 13),
-    gpio::PC3<Analog> => (ADC3, 13),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC4<Analog> => (ADC2, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-    gpio::PC5<Analog> => (ADC2, 15),
-    Temperature => (ADC1, 18),
-    Vbat => (ADC1, 18),
-    Vref => (ADC1, 17),
-);
-
-// Not available on V variant
-#[cfg(any(feature = "stm32f429", feature = "stm32f439"))]
-adc_pins!(
-    gpio::PF10<Analog> => (ADC3, 8),
-    gpio::PF3<Analog> => (ADC3, 9),
-    gpio::PF4<Analog> => (ADC3, 14),
-    gpio::PF5<Analog> => (ADC3, 15),
-);
-
-// Not available on V or A variants
-#[cfg(any(feature = "stm32f429", feature = "stm32f439"))]
-adc_pins!(
-    gpio::PF6<Analog> => (ADC3, 4),
-    gpio::PF7<Analog> => (ADC3, 5),
-    gpio::PF8<Analog> => (ADC3, 6),
-    gpio::PF9<Analog> => (ADC3, 7),
-);
-
-#[cfg(feature = "stm32f446")]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA0<Analog> => (ADC2, 0),
-    gpio::PA0<Analog> => (ADC3, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA1<Analog> => (ADC2, 1),
-    gpio::PA1<Analog> => (ADC3, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA2<Analog> => (ADC2, 2),
-    gpio::PA2<Analog> => (ADC3, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA3<Analog> => (ADC2, 3),
-    gpio::PA3<Analog> => (ADC3, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA4<Analog> => (ADC2, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA5<Analog> => (ADC2, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA6<Analog> => (ADC2, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PA7<Analog> => (ADC2, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB0<Analog> => (ADC2, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    gpio::PB1<Analog> => (ADC2, 9),
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC0<Analog> => (ADC2, 10),
-    gpio::PC0<Analog> => (ADC3, 10),
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC2<Analog> => (ADC2, 12),
-    gpio::PC2<Analog> => (ADC3, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC3<Analog> => (ADC2, 13),
-    gpio::PC3<Analog> => (ADC3, 13),
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC4<Analog> => (ADC2, 14),
-    Temperature => (ADC1, 18),
-    Vbat => (ADC1, 18),
-    Vref => (ADC1, 17),
-);
-
-// Not available on M variant
-#[cfg(feature = "stm32f446")]
-adc_pins!(
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC1<Analog> => (ADC2, 11),
-    gpio::PC1<Analog> => (ADC3, 11),
-    gpio::PC5<Analog> => (ADC1, 15),
-    gpio::PC5<Analog> => (ADC2, 15),
-    gpio::PC5<Analog> => (ADC3, 15),
-);
-
-// Only available on Z variant
-#[cfg(feature = "stm32f446")]
-adc_pins!(
-    gpio::PF10<Analog> => (ADC3, 8),
-    gpio::PF3<Analog> => (ADC3, 9),
-    gpio::PF4<Analog> => (ADC3, 14),
-    gpio::PF5<Analog> => (ADC3, 15),
-    gpio::PF6<Analog> => (ADC3, 4),
-    gpio::PF7<Analog> => (ADC3, 5),
-    gpio::PF8<Analog> => (ADC3, 6),
-    gpio::PF9<Analog> => (ADC3, 7),
-);
-
-#[cfg(any(feature = "stm32f469", feature = "stm32f479"))]
-adc_pins!(
-    gpio::PA0<Analog> => (ADC1, 0),
-    gpio::PA0<Analog> => (ADC2, 0),
-    gpio::PA0<Analog> => (ADC3, 0),
-    gpio::PA1<Analog> => (ADC1, 1),
-    gpio::PA1<Analog> => (ADC2, 1),
-    gpio::PA1<Analog> => (ADC3, 1),
-    gpio::PA2<Analog> => (ADC1, 2),
-    gpio::PA2<Analog> => (ADC2, 2),
-    gpio::PA2<Analog> => (ADC3, 2),
-    gpio::PA3<Analog> => (ADC1, 3),
-    gpio::PA3<Analog> => (ADC2, 3),
-    gpio::PA3<Analog> => (ADC3, 3),
-    gpio::PA4<Analog> => (ADC1, 4),
-    gpio::PA4<Analog> => (ADC2, 4),
-    gpio::PA5<Analog> => (ADC1, 5),
-    gpio::PA5<Analog> => (ADC2, 5),
-    gpio::PA6<Analog> => (ADC1, 6),
-    gpio::PA6<Analog> => (ADC2, 6),
-    gpio::PA7<Analog> => (ADC1, 7),
-    gpio::PA7<Analog> => (ADC2, 7),
-    gpio::PB0<Analog> => (ADC1, 8),
-    gpio::PB0<Analog> => (ADC2, 8),
-    gpio::PB1<Analog> => (ADC1, 9),
-    gpio::PB1<Analog> => (ADC2, 9),
-    gpio::PC0<Analog> => (ADC1, 10),
-    gpio::PC0<Analog> => (ADC2, 10),
-    gpio::PC0<Analog> => (ADC3, 10),
-    gpio::PC1<Analog> => (ADC1, 11),
-    gpio::PC1<Analog> => (ADC2, 11),
-    gpio::PC1<Analog> => (ADC3, 11),
-    Temperature => (ADC1, 18),
-    Vbat => (ADC1, 18),
-    Vref => (ADC1, 17),
-);
-
-// Not available on A variant
-#[cfg(any(feature = "stm32f469", feature = "stm32f479"))]
-adc_pins!(
-    gpio::PC2<Analog> => (ADC1, 12),
-    gpio::PC2<Analog> => (ADC2, 12),
-    gpio::PC2<Analog> => (ADC3, 12),
-    gpio::PC3<Analog> => (ADC1, 13),
-    gpio::PC3<Analog> => (ADC2, 13),
-    gpio::PC3<Analog> => (ADC3, 13),
-);
-
-// Not available on V or A variants
-#[cfg(any(feature = "stm32f469", feature = "stm32f479"))]
-adc_pins!(
-    gpio::PC4<Analog> => (ADC1, 14),
-    gpio::PC4<Analog> => (ADC2, 14),
-    gpio::PC5<Analog> => (ADC1, 15),
-    gpio::PC5<Analog> => (ADC2, 15),
-);
-
-// Not available on V variant
-#[cfg(any(feature = "stm32f469", feature = "stm32f479"))]
-adc_pins!(
-    gpio::PF10<Analog> => (ADC3, 8),
-    gpio::PF3<Analog> => (ADC3, 9),
-    gpio::PF4<Analog> => (ADC3, 14),
-    gpio::PF5<Analog> => (ADC3, 15),
-);
-
-// Only available on B/I/N variants
-#[cfg(any(feature = "stm32f469", feature = "stm32f479"))]
-adc_pins!(
-    gpio::PF6<Analog> => (ADC3, 4),
-    gpio::PF7<Analog> => (ADC3, 5),
-    gpio::PF8<Analog> => (ADC3, 6),
-    gpio::PF9<Analog> => (ADC3, 7),
-);

@@ -2,6 +2,7 @@ on:
   push:
     branches: [ staging, trying, master ]
   pull_request:
+  merge_group:
 
 name: Code formatting check
 
@@ -10,14 +11,8 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          components: rustfmt
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+      - uses: actions/checkout@v4
+      - name: Use the latest stable rustc
+        run: rustup update stable && rustup default stable
+
+      - run: cargo fmt --all -- --check

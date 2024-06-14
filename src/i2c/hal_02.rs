@@ -1,8 +1,10 @@
 mod blocking {
     use super::super::{Error, I2c, Instance};
-    use embedded_hal::blocking::i2c::{Read, Write, WriteIter, WriteIterRead, WriteRead};
+    use embedded_hal_02::blocking::i2c::{
+        Operation, Read, Transactional, Write, WriteIter, WriteIterRead, WriteRead,
+    };
 
-    impl<I2C, PINS> WriteRead for I2c<I2C, PINS>
+    impl<I2C> WriteRead for I2c<I2C>
     where
         I2C: Instance,
     {
@@ -18,7 +20,7 @@ mod blocking {
         }
     }
 
-    impl<I2C, PINS> WriteIterRead for I2c<I2C, PINS>
+    impl<I2C> WriteIterRead for I2c<I2C>
     where
         I2C: Instance,
     {
@@ -37,7 +39,7 @@ mod blocking {
         }
     }
 
-    impl<I2C, PINS> Write for I2c<I2C, PINS>
+    impl<I2C> Write for I2c<I2C>
     where
         I2C: Instance,
     {
@@ -48,7 +50,7 @@ mod blocking {
         }
     }
 
-    impl<I2C, PINS> WriteIter for I2c<I2C, PINS>
+    impl<I2C> WriteIter for I2c<I2C>
     where
         I2C: Instance,
     {
@@ -62,7 +64,7 @@ mod blocking {
         }
     }
 
-    impl<I2C, PINS> Read for I2c<I2C, PINS>
+    impl<I2C> Read for I2c<I2C>
     where
         I2C: Instance,
     {
@@ -70,6 +72,21 @@ mod blocking {
 
         fn read(&mut self, addr: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
             self.read(addr, buffer)
+        }
+    }
+
+    impl<I2C> Transactional for I2c<I2C>
+    where
+        I2C: Instance,
+    {
+        type Error = Error;
+
+        fn exec(
+            &mut self,
+            address: u8,
+            operations: &mut [Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            self.transaction_slice_hal_02(address, operations)
         }
     }
 }

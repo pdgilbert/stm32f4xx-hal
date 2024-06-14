@@ -3,11 +3,11 @@
 //! TIM2 and TIM5 are a general purpose 32-bit auto-reload up/downcounter with
 //! a 16-bit prescaler.
 
-use embedded_hal::{
+use embedded_hal_02::{
     blocking::delay::{DelayMs, DelayUs},
     timer::{Cancel, CountDown, Periodic},
 };
-use fugit::{ExtU32, HertzU32 as Hertz, TimerDurationU32};
+use fugit::{ExtU32Ceil, HertzU32 as Hertz, TimerDurationU32};
 use void::Void;
 
 use super::{
@@ -16,36 +16,42 @@ use super::{
 };
 
 impl DelayUs<u32> for SysDelay {
+    #[inline]
     fn delay_us(&mut self, us: u32) {
-        self.delay(us.micros())
+        self.delay(us.micros_at_least())
     }
 }
 
 impl DelayMs<u32> for SysDelay {
+    #[inline]
     fn delay_ms(&mut self, ms: u32) {
-        self.delay_us(ms * 1_000);
+        self.delay(ms.millis_at_least());
     }
 }
 
 impl DelayUs<u16> for SysDelay {
+    #[inline]
     fn delay_us(&mut self, us: u16) {
         self.delay_us(us as u32)
     }
 }
 
 impl DelayMs<u16> for SysDelay {
+    #[inline]
     fn delay_ms(&mut self, ms: u16) {
         self.delay_ms(ms as u32);
     }
 }
 
 impl DelayUs<u8> for SysDelay {
+    #[inline]
     fn delay_us(&mut self, us: u8) {
         self.delay_us(us as u32)
     }
 }
 
 impl DelayMs<u8> for SysDelay {
+    #[inline]
     fn delay_ms(&mut self, ms: u8) {
         self.delay_ms(ms as u32);
     }
@@ -133,7 +139,7 @@ impl<const FREQ: u32> Cancel for SysCounter<FREQ> {
     }
 }
 
-impl<TIM: Instance + WithPwm, const C: u8> embedded_hal::PwmPin for PwmChannel<TIM, C> {
+impl<TIM: Instance + WithPwm, const C: u8> embedded_hal_02::PwmPin for PwmChannel<TIM, C> {
     type Duty = u16;
 
     fn disable(&mut self) {
@@ -153,10 +159,10 @@ impl<TIM: Instance + WithPwm, const C: u8> embedded_hal::PwmPin for PwmChannel<T
     }
 }
 
-impl<TIM, P, PINS> embedded_hal::Pwm for PwmHz<TIM, P, PINS>
+impl<TIM, PINS> embedded_hal_02::Pwm for PwmHz<TIM, PINS>
 where
     TIM: Instance + WithPwm,
-    PINS: Pins<TIM, P>,
+    PINS: Pins<TIM>,
 {
     type Channel = Channel;
     type Duty = u16;
@@ -198,40 +204,40 @@ where
 impl<TIM: Instance, const FREQ: u32> DelayUs<u32> for Delay<TIM, FREQ> {
     /// Sleep for `us` microseconds
     fn delay_us(&mut self, us: u32) {
-        self.delay(us.micros())
+        self.delay(us.micros_at_least())
     }
 }
 
 impl<TIM: Instance, const FREQ: u32> DelayMs<u32> for Delay<TIM, FREQ> {
     /// Sleep for `ms` milliseconds
     fn delay_ms(&mut self, ms: u32) {
-        self.delay(ms.millis())
+        self.delay(ms.millis_at_least())
     }
 }
 
 impl<TIM: Instance, const FREQ: u32> DelayUs<u16> for Delay<TIM, FREQ> {
     /// Sleep for `us` microseconds
     fn delay_us(&mut self, us: u16) {
-        self.delay((us as u32).micros())
+        self.delay((us as u32).micros_at_least())
     }
 }
 impl<TIM: Instance, const FREQ: u32> DelayMs<u16> for Delay<TIM, FREQ> {
     /// Sleep for `ms` milliseconds
     fn delay_ms(&mut self, ms: u16) {
-        self.delay((ms as u32).millis())
+        self.delay((ms as u32).millis_at_least())
     }
 }
 
 impl<TIM: Instance, const FREQ: u32> DelayUs<u8> for Delay<TIM, FREQ> {
     /// Sleep for `us` microseconds
     fn delay_us(&mut self, us: u8) {
-        self.delay((us as u32).micros())
+        self.delay((us as u32).micros_at_least())
     }
 }
 impl<TIM: Instance, const FREQ: u32> DelayMs<u8> for Delay<TIM, FREQ> {
     /// Sleep for `ms` milliseconds
     fn delay_ms(&mut self, ms: u8) {
-        self.delay((ms as u32).millis())
+        self.delay((ms as u32).millis_at_least())
     }
 }
 
@@ -263,10 +269,10 @@ impl<TIM: Instance, const FREQ: u32> Cancel for Counter<TIM, FREQ> {
     }
 }
 
-impl<TIM, P, PINS, const FREQ: u32> embedded_hal::Pwm for Pwm<TIM, P, PINS, FREQ>
+impl<TIM, PINS, const FREQ: u32> embedded_hal_02::Pwm for Pwm<TIM, PINS, FREQ>
 where
     TIM: Instance + WithPwm,
-    PINS: Pins<TIM, P>,
+    PINS: Pins<TIM>,
 {
     type Channel = Channel;
     type Duty = u16;

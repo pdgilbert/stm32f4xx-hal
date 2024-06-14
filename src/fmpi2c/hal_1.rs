@@ -1,15 +1,17 @@
-use embedded_hal_one::i2c::ErrorType;
+use embedded_hal::i2c::ErrorType;
 
-impl<I2C, PINS> ErrorType for super::FMPI2c<I2C, PINS> {
+use super::Instance;
+
+impl<I2C: Instance> ErrorType for super::FMPI2c<I2C> {
     type Error = super::Error;
 }
 
 mod blocking {
-    use super::super::{fmpi2c1, FMPI2c};
+    use super::super::{fmpi2c1, FMPI2c, Instance};
     use core::ops::Deref;
-    use embedded_hal_one::i2c::blocking::Operation;
+    use embedded_hal::i2c::Operation;
 
-    impl<I2C, PINS> embedded_hal_one::i2c::blocking::I2c for FMPI2c<I2C, PINS>
+    impl<I2C: Instance> embedded_hal::i2c::I2c for FMPI2c<I2C>
     where
         I2C: Deref<Target = fmpi2c1::RegisterBlock>,
     {
@@ -21,13 +23,6 @@ mod blocking {
             self.write(addr, bytes)
         }
 
-        fn write_iter<B>(&mut self, _addr: u8, _bytes: B) -> Result<(), Self::Error>
-        where
-            B: IntoIterator<Item = u8>,
-        {
-            todo!()
-        }
-
         fn write_read(
             &mut self,
             addr: u8,
@@ -37,30 +32,11 @@ mod blocking {
             self.write_read(addr, bytes, buffer)
         }
 
-        fn write_iter_read<B>(
+        fn transaction(
             &mut self,
             _addr: u8,
-            _bytes: B,
-            _buffer: &mut [u8],
-        ) -> Result<(), Self::Error>
-        where
-            B: IntoIterator<Item = u8>,
-        {
-            todo!()
-        }
-
-        fn transaction<'a>(
-            &mut self,
-            _addr: u8,
-            _operations: &mut [Operation<'a>],
+            _operations: &mut [Operation<'_>],
         ) -> Result<(), Self::Error> {
-            todo!()
-        }
-
-        fn transaction_iter<'a, O>(&mut self, _addr: u8, _operations: O) -> Result<(), Self::Error>
-        where
-            O: IntoIterator<Item = Operation<'a>>,
-        {
             todo!()
         }
     }

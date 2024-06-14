@@ -97,7 +97,7 @@ impl Delay {
 }
 
 // Implement DelayUs/DelayMs for various integer types
-impl<T: Into<u64>> embedded_hal::blocking::delay::DelayUs<T> for Delay {
+impl<T: Into<u64>> embedded_hal_02::blocking::delay::DelayUs<T> for Delay {
     fn delay_us(&mut self, us: T) {
         // Convert us to ticks
         let start = DWT::cycle_count();
@@ -105,7 +105,7 @@ impl<T: Into<u64>> embedded_hal::blocking::delay::DelayUs<T> for Delay {
         Delay::delay_ticks(start, ticks);
     }
 }
-impl<T: Into<u64>> embedded_hal::blocking::delay::DelayMs<T> for Delay {
+impl<T: Into<u64>> embedded_hal_02::blocking::delay::DelayMs<T> for Delay {
     fn delay_ms(&mut self, ms: T) {
         // Convert ms to ticks
         let start = DWT::cycle_count();
@@ -114,23 +114,26 @@ impl<T: Into<u64>> embedded_hal::blocking::delay::DelayMs<T> for Delay {
     }
 }
 
-impl embedded_hal_one::delay::blocking::DelayUs for Delay {
-    type Error = core::convert::Infallible;
+impl embedded_hal::delay::DelayNs for Delay {
+    fn delay_ns(&mut self, ns: u32) {
+        // Convert us to ticks
+        let start = DWT::cycle_count();
+        let ticks = (ns as u64 * self.clock.raw() as u64) / 1_000_000_000;
+        Delay::delay_ticks(start, ticks);
+    }
 
-    fn delay_us(&mut self, us: u32) -> Result<(), Self::Error> {
+    fn delay_us(&mut self, us: u32) {
         // Convert us to ticks
         let start = DWT::cycle_count();
         let ticks = (us as u64 * self.clock.raw() as u64) / 1_000_000;
         Delay::delay_ticks(start, ticks);
-        Ok(())
     }
 
-    fn delay_ms(&mut self, ms: u32) -> Result<(), Self::Error> {
+    fn delay_ms(&mut self, ms: u32) {
         // Convert ms to ticks
         let start = DWT::cycle_count();
         let ticks = (ms as u64 * self.clock.raw() as u64) / 1_000;
         Delay::delay_ticks(start, ticks);
-        Ok(())
     }
 }
 

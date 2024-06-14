@@ -1,22 +1,10 @@
 use core::convert::Infallible;
 
 use super::{
-    dynamic::PinModeError, marker, DynamicPin, ErasedPin, Input, OpenDrain, Output,
-    PartiallyErasedPin, Pin, PinMode,
+    dynamic::PinModeError, marker, DynamicPin, ErasedPin, Output, PartiallyErasedPin, Pin,
 };
 
-pub use embedded_hal_one::digital::PinState;
-use embedded_hal_one::digital::{
-    blocking::{InputPin, IoPin, OutputPin, StatefulOutputPin, ToggleableOutputPin},
-    ErrorType,
-};
-
-fn into_state(state: PinState) -> super::PinState {
-    match state {
-        PinState::Low => super::PinState::Low,
-        PinState::High => super::PinState::High,
-    }
-}
+use embedded_hal::digital::{ErrorType, InputPin, OutputPin, StatefulOutputPin};
 
 // Implementations for `Pin`
 impl<const P: char, const N: u8, MODE> ErrorType for Pin<P, N, MODE> {
@@ -39,21 +27,13 @@ impl<const P: char, const N: u8, MODE> OutputPin for Pin<P, N, Output<MODE>> {
 
 impl<const P: char, const N: u8, MODE> StatefulOutputPin for Pin<P, N, Output<MODE>> {
     #[inline(always)]
-    fn is_set_high(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_set_high())
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_set_high(self))
     }
 
     #[inline(always)]
-    fn is_set_low(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_set_low())
-    }
-}
-
-impl<const P: char, const N: u8, MODE> ToggleableOutputPin for Pin<P, N, Output<MODE>> {
-    #[inline(always)]
-    fn toggle(&mut self) -> Result<(), Self::Error> {
-        self.toggle();
-        Ok(())
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_set_low(self))
     }
 }
 
@@ -62,52 +42,13 @@ where
     MODE: marker::Readable,
 {
     #[inline(always)]
-    fn is_high(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_high())
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_high(self))
     }
 
     #[inline(always)]
-    fn is_low(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_low())
-    }
-}
-
-impl<const P: char, const N: u8> IoPin<Self, Self> for Pin<P, N, Output<OpenDrain>> {
-    type Error = Infallible;
-    fn into_input_pin(self) -> Result<Self, Self::Error> {
-        Ok(self)
-    }
-    fn into_output_pin(mut self, state: PinState) -> Result<Self, Self::Error> {
-        self.set_state(into_state(state));
-        Ok(self)
-    }
-}
-
-impl<const P: char, const N: u8, Otype> IoPin<Pin<P, N, Input>, Self> for Pin<P, N, Output<Otype>>
-where
-    Output<Otype>: PinMode,
-{
-    type Error = Infallible;
-    fn into_input_pin(self) -> Result<Pin<P, N, Input>, Self::Error> {
-        Ok(self.into_input())
-    }
-    fn into_output_pin(mut self, state: PinState) -> Result<Self, Self::Error> {
-        self.set_state(into_state(state));
-        Ok(self)
-    }
-}
-
-impl<const P: char, const N: u8, Otype> IoPin<Self, Pin<P, N, Output<Otype>>> for Pin<P, N, Input>
-where
-    Output<Otype>: PinMode,
-{
-    type Error = Infallible;
-    fn into_input_pin(self) -> Result<Self, Self::Error> {
-        Ok(self)
-    }
-    fn into_output_pin(mut self, state: PinState) -> Result<Pin<P, N, Output<Otype>>, Self::Error> {
-        self._set_state(into_state(state));
-        Ok(self.into_mode())
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_low(self))
     }
 }
 
@@ -132,21 +73,13 @@ impl<MODE> OutputPin for ErasedPin<Output<MODE>> {
 
 impl<MODE> StatefulOutputPin for ErasedPin<Output<MODE>> {
     #[inline(always)]
-    fn is_set_high(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_set_high())
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_set_high(self))
     }
 
     #[inline(always)]
-    fn is_set_low(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_set_low())
-    }
-}
-
-impl<MODE> ToggleableOutputPin for ErasedPin<Output<MODE>> {
-    #[inline(always)]
-    fn toggle(&mut self) -> Result<(), Self::Error> {
-        self.toggle();
-        Ok(())
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_set_low(self))
     }
 }
 
@@ -155,13 +88,13 @@ where
     MODE: marker::Readable,
 {
     #[inline(always)]
-    fn is_high(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_high())
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_high(self))
     }
 
     #[inline(always)]
-    fn is_low(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_low())
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_low(self))
     }
 }
 
@@ -186,21 +119,13 @@ impl<const P: char, MODE> OutputPin for PartiallyErasedPin<P, Output<MODE>> {
 
 impl<const P: char, MODE> StatefulOutputPin for PartiallyErasedPin<P, Output<MODE>> {
     #[inline(always)]
-    fn is_set_high(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_set_high())
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_set_high(self))
     }
 
     #[inline(always)]
-    fn is_set_low(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_set_low())
-    }
-}
-
-impl<const P: char, MODE> ToggleableOutputPin for PartiallyErasedPin<P, Output<MODE>> {
-    #[inline(always)]
-    fn toggle(&mut self) -> Result<(), Self::Error> {
-        self.toggle();
-        Ok(())
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_set_low(self))
     }
 }
 
@@ -209,13 +134,13 @@ where
     MODE: marker::Readable,
 {
     #[inline(always)]
-    fn is_high(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_high())
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_high(self))
     }
 
     #[inline(always)]
-    fn is_low(&self) -> Result<bool, Self::Error> {
-        Ok(self.is_low())
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(Self::is_low(self))
     }
 }
 
@@ -234,10 +159,10 @@ impl<const P: char, const N: u8> OutputPin for DynamicPin<P, N> {
 }
 
 impl<const P: char, const N: u8> InputPin for DynamicPin<P, N> {
-    fn is_high(&self) -> Result<bool, Self::Error> {
-        self.is_high()
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Self::is_high(self)
     }
-    fn is_low(&self) -> Result<bool, Self::Error> {
-        self.is_low()
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Self::is_low(self)
     }
 }

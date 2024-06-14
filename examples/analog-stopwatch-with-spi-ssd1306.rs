@@ -15,8 +15,8 @@ use crate::hal::{
     interrupt, pac,
     prelude::*,
     rcc::{Clocks, Rcc},
-    spi::Spi,
-    timer::{CounterUs, Event, FTimer, Timer},
+    spi::{Mode, Phase, Polarity, Spi},
+    timer::{CounterUs, Event, FTimer, Flag, Timer},
 };
 
 use core::cell::{Cell, RefCell};
@@ -24,8 +24,6 @@ use core::fmt::Write;
 use core::ops::DerefMut;
 use cortex_m::interrupt::{free, CriticalSection, Mutex};
 use heapless::String;
-
-use hal::spi::{Mode, Phase, Polarity};
 
 use core::f32::consts::{FRAC_PI_2, PI};
 use cortex_m_rt::{entry, exception, ExceptionFrame};
@@ -67,7 +65,7 @@ enum StopwatchState {
 fn main() -> ! {
     let mut dp = pac::Peripherals::take().unwrap();
     let cp = cortex_m::peripheral::Peripherals::take().unwrap();
-    dp.RCC.apb2enr.write(|w| w.syscfgen().enabled());
+    dp.RCC.apb2enr().write(|w| w.syscfgen().enabled());
 
     let rcc = dp.RCC.constrain();
 
@@ -90,9 +88,9 @@ fn main() -> ! {
     //cs - pe4
     //dc - pe3
 
-    let sck = gpioe.pe2.into_alternate();
-    let miso = gpioe.pe5.into_alternate();
-    let mosi = gpioe.pe6.into_alternate();
+    let sck = gpioe.pe2;
+    let miso = gpioe.pe5;
+    let mosi = gpioe.pe6;
 
     let spi = Spi::new(
         dp.SPI4,
@@ -115,7 +113,7 @@ fn main() -> ! {
     let mut delay = Timer::syst(cp.SYST, &clocks).delay();
 
     ss.set_high();
-    delay.delay_ms(100_u32);
+    delay.delay_ms(100);
     ss.set_low();
 
     // Set up the display
@@ -149,7 +147,7 @@ fn main() -> ! {
         let mut format_buf = String::<10>::new();
         format_elapsed(&mut format_buf, elapsed);
 
-        disp.clear();
+        disp.clear_buffer();
 
         let state = free(|cs| STATE.borrow(cs).get());
         let state_msg = match state {
@@ -203,7 +201,7 @@ fn main() -> ! {
 
         disp.flush().unwrap();
 
-        delay.delay_ms(100u32);
+        delay.delay_ms(100);
     }
 }
 
@@ -263,7 +261,7 @@ fn EXTI0() {
 fn TIM2() {
     free(|cs| {
         if let Some(ref mut tim2) = TIMER_TIM2.borrow(cs).borrow_mut().deref_mut() {
-            tim2.clear_interrupt(Event::Update);
+            tim2.clear_flags(Flag::Update);
         }
 
         let cell = ELAPSED_MS.borrow(cs);
@@ -323,7 +321,7 @@ fn format_elapsed(buf: &mut String<10>, elapsed: u32) {
     let minutes = elapsed_to_m(elapsed);
     let seconds = elapsed_to_s(elapsed);
     let millis = elapsed_to_ms(elapsed);
-    write!(buf, "{}:{:02}.{:03}", minutes, seconds, millis).unwrap();
+    write!(buf, "{minutes}:{seconds:02}.{millis:03}").unwrap();
 }
 
 fn elapsed_to_ms(elapsed: u32) -> u32 {
@@ -352,7 +350,7 @@ fn draw_face() -> impl Iterator<Item = Pixel<BinaryColor>> {
         Circle::new(CENTER, SIZE * 2).into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1));
 
     // Create 12 `Line`s starting from the outer edge and drawing inwards by `tic_len` pixels
-    let tics = (0..12).into_iter().map(move |index| {
+    let tics = (0..12).map(move |index| {
         // Start angle around the circle, in radians
         let angle = START + (PI * 2.0 / 12.0) * index as f32;
 
@@ -369,7 +367,7 @@ fn draw_face() -> impl Iterator<Item = Pixel<BinaryColor>> {
 
     // Create a single iterator of pixels, first iterating over the circle, then over the 12 lines
     // generated
-    face.pixels().into_iter().chain(tics.flatten())
+    face.pixels().chain(tics.flatten())
 }
 
 /// Draw the seconds hand given a seconds value (0 - 59)
@@ -395,9 +393,7 @@ fn draw_seconds_hand(seconds: u32) -> impl Iterator<Item = Pixel<BinaryColor>> {
     // Add a fancy circle near the end of the hand
     let decoration = Circle::new(decoration_position, 3).into_styled(decoration_style);
 
-    hand.pixels()
-        .into_iter()
-        .chain(decoration.pixels().into_iter())
+    hand.pixels().chain(decoration.pixels())
 }
 
 #[exception]

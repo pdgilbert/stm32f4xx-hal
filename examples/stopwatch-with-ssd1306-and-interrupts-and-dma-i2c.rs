@@ -14,7 +14,7 @@
 //!
 //! Video of this example running: https://imgur.com/a/lQTQFLy
 
-#![allow(clippy::empty_loop)]
+#![allow(clippy::empty_loop, clippy::new_without_default)]
 #![no_std]
 #![no_main]
 
@@ -22,15 +22,15 @@ use panic_semihosting as _; // logs messages to the host stderr; requires a debu
 use stm32f4xx_hal as hal;
 
 use crate::hal::{
-    dma::{Stream0, Stream1, StreamsTuple},
+    dma::{Stream1, StreamsTuple},
     gpio::*,
-    i2c::dma::{I2CMasterDma, I2CMasterWriteDMA},
+    i2c::dma::{I2CMasterDma, NoDMA, TxDMA},
     i2c::I2c,
     interrupt, pac,
     pac::{DMA1, I2C1},
     prelude::*,
     rcc::{Clocks, Rcc},
-    timer::{CounterUs, Event, Timer},
+    timer::{CounterUs, Event, Flag, Timer},
 };
 use core::cell::{Cell, RefCell};
 use core::fmt::Write;
@@ -38,7 +38,7 @@ use core::ops::DerefMut;
 use core::sync::atomic::{AtomicBool, Ordering};
 use cortex_m::interrupt::{free, CriticalSection, Mutex};
 use cortex_m_rt::entry;
-use display_interface::{DataFormat, DisplayError, WriteOnlyDataCommand};
+use display_interface_04::{DataFormat, DisplayError, WriteOnlyDataCommand};
 use embedded_graphics::{
     mono_font::{
         ascii::{FONT_6X12, FONT_9X15},
@@ -52,12 +52,9 @@ use heapless::String;
 use ssd1306::{prelude::*, Ssd1306};
 
 pub type I2c1Handle = I2CMasterDma<
-    I2C1,                                       // Instance of I2C
-    (PB8<AF4<OpenDrain>>, PB9<AF4<OpenDrain>>), // Pins
-    Stream1<DMA1>,                              // Stream used for Tx
-    0,                                          // Channel for Tx
-    Stream0<DMA1>,                              // Stream used for Rx (Not used in example)
-    1,                                          // Channel for Rx (Not used in example)
+    I2C1,                          // Instance of I2C
+    TxDMA<I2C1, Stream1<DMA1>, 0>, // Stream and channel used for Tx. First parameter must be same Instance as first generic parameter of I2CMasterDma
+    NoDMA,                         // This example don't need Rx
 >;
 
 // Set up global state. It's all mutexed up for concurrency safety.
@@ -100,7 +97,9 @@ impl DMAI2cInterface {
 
 impl WriteOnlyDataCommand for DMAI2cInterface {
     fn send_commands(&mut self, cmd: DataFormat<'_>) -> Result<(), DisplayError> {
-        while COMMAND_SEND.load(Ordering::SeqCst) {}
+        while COMMAND_SEND.load(Ordering::SeqCst) {
+            core::hint::spin_loop()
+        }
 
         match cmd {
             DataFormat::U8(slice) => {
@@ -129,7 +128,9 @@ impl WriteOnlyDataCommand for DMAI2cInterface {
     }
 
     fn send_data(&mut self, buf: DataFormat<'_>) -> Result<(), DisplayError> {
-        while DRAWING.load(Ordering::SeqCst) {}
+        while DRAWING.load(Ordering::SeqCst) {
+            core::hint::spin_loop()
+        }
 
         match buf {
             DataFormat::U8(slice) => {
@@ -162,19 +163,11 @@ fn main() -> ! {
         let rcc = dp.RCC.constrain();
         let clocks = setup_clocks(rcc);
         let gpiob = dp.GPIOB.split();
-        let i2c = I2c::new(
-            dp.I2C1,
-            (
-                gpiob.pb8.into_alternate().set_open_drain(),
-                gpiob.pb9.into_alternate().set_open_drain(),
-            ),
-            400.kHz(),
-            &clocks,
-        );
+        let i2c = I2c::new(dp.I2C1, (gpiob.pb8, gpiob.pb9), 400.kHz(), &clocks);
 
         // Then convert it to DMA
         let streams = StreamsTuple::new(dp.DMA1);
-        let i2c_dma: I2c1Handle = i2c.use_dma(streams.1, streams.0);
+        let i2c_dma: I2c1Handle = i2c.use_dma_tx(streams.1);
         free(|cs| {
             I2C1.borrow(cs).replace(Some(i2c_dma));
         });
@@ -233,7 +226,7 @@ fn main() -> ! {
             let mut format_buf = String::<10>::new();
             format_elapsed(&mut format_buf, elapsed);
 
-            disp.clear();
+            disp.clear_buffer();
 
             let state = free(|cs| STATE.borrow(cs).get());
             let state_msg = match state {
@@ -261,7 +254,7 @@ fn main() -> ! {
 
             disp.flush().unwrap();
 
-            delay.delay_ms(100u32);
+            delay.delay_ms(100);
         }
     }
 
@@ -272,7 +265,7 @@ fn main() -> ! {
 fn TIM2() {
     free(|cs| {
         if let Some(ref mut tim2) = TIMER_TIM2.borrow(cs).borrow_mut().deref_mut() {
-            tim2.clear_interrupt(Event::Update);
+            tim2.clear_flags(Flag::Update);
         }
 
         let cell = ELAPSED_MS.borrow(cs);
@@ -352,7 +345,7 @@ fn format_elapsed(buf: &mut String<10>, elapsed: u32) {
     let minutes = elapsed_to_m(elapsed);
     let seconds = elapsed_to_s(elapsed);
     let millis = elapsed_to_ms(elapsed);
-    write!(buf, "{}:{:02}.{:03}", minutes, seconds, millis).unwrap();
+    write!(buf, "{minutes}:{seconds:02}.{millis:03}").unwrap();
 }
 
 fn elapsed_to_ms(elapsed: u32) -> u32 {

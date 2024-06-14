@@ -1,4 +1,6 @@
-pub use embedded_hal_one::spi::{Error, ErrorKind, ErrorType, Mode, Phase, Polarity};
+pub use embedded_hal::spi::{Error, ErrorKind, ErrorType, Mode, Phase, Polarity};
+
+use super::Instance;
 
 impl From<Polarity> for super::Polarity {
     fn from(p: Polarity) -> Self {
@@ -37,101 +39,53 @@ impl Error for super::Error {
     }
 }
 
-impl<SPI, PINS, const BIDI: bool, W> ErrorType for super::Spi<SPI, PINS, BIDI, W> {
+impl<SPI: Instance, const BIDI: bool, W> ErrorType for super::Spi<SPI, BIDI, W> {
     type Error = super::Error;
 }
 
 mod nb {
     use super::super::{Error, FrameSize, Instance, Spi};
-    use embedded_hal_one::spi::nb::FullDuplex;
+    use embedded_hal_nb::spi::FullDuplex;
 
-    impl<SPI, PINS, const BIDI: bool, W: FrameSize> FullDuplex<W> for Spi<SPI, PINS, BIDI, W>
+    impl<SPI, const BIDI: bool, W: FrameSize> FullDuplex<W> for Spi<SPI, BIDI, W>
     where
         SPI: Instance,
     {
         fn read(&mut self) -> nb::Result<W, Error> {
-            if BIDI {
-                self.spi.cr1.modify(|_, w| w.bidioe().clear_bit());
-            }
-            self.check_read()
+            self.read_nonblocking()
         }
 
         fn write(&mut self, byte: W) -> nb::Result<(), Error> {
-            if BIDI {
-                self.spi.cr1.modify(|_, w| w.bidioe().set_bit());
-            }
-            self.check_send(byte)
+            self.write_nonblocking(byte)
         }
     }
 }
 
 mod blocking {
     use super::super::{FrameSize, Instance, Spi};
-    use embedded_hal_one::spi::{
-        blocking::{SpiBus, SpiBusFlush, SpiBusRead, SpiBusWrite},
-        nb::FullDuplex,
-    };
+    use embedded_hal::spi::SpiBus;
 
-    impl<SPI, PINS, const BIDI: bool, W: FrameSize + 'static> SpiBus<W> for Spi<SPI, PINS, BIDI, W>
+    impl<SPI, const BIDI: bool, W: FrameSize + 'static> SpiBus<W> for Spi<SPI, BIDI, W>
     where
         SPI: Instance,
     {
         fn transfer_in_place(&mut self, words: &mut [W]) -> Result<(), Self::Error> {
-            for word in words {
-                nb::block!(<Self as FullDuplex<W>>::write(self, *word))?;
-                *word = nb::block!(<Self as FullDuplex<W>>::read(self))?;
-            }
-
-            Ok(())
+            self.transfer_in_place(words)
         }
 
         fn transfer(&mut self, buff: &mut [W], data: &[W]) -> Result<(), Self::Error> {
-            assert_eq!(data.len(), buff.len());
-
-            for (d, b) in data.iter().cloned().zip(buff.iter_mut()) {
-                nb::block!(<Self as FullDuplex<W>>::write(self, d))?;
-                *b = nb::block!(<Self as FullDuplex<W>>::read(self))?;
-            }
-
-            Ok(())
+            self.transfer(buff, data)
         }
-    }
 
-    impl<SPI, PINS, const BIDI: bool, W> SpiBusFlush for Spi<SPI, PINS, BIDI, W>
-    where
-        SPI: Instance,
-    {
-        fn flush(&mut self) -> Result<(), Self::Error> {
-            Ok(())
-        }
-    }
-
-    impl<SPI, PINS, const BIDI: bool, W: FrameSize + 'static> SpiBusWrite<W> for Spi<SPI, PINS, BIDI, W>
-    where
-        SPI: Instance,
-    {
-        fn write(&mut self, words: &[W]) -> Result<(), Self::Error> {
-            for word in words {
-                nb::block!(<Self as FullDuplex<W>>::write(self, *word))?;
-                if !BIDI {
-                    nb::block!(<Self as FullDuplex<W>>::read(self))?;
-                }
-            }
-
-            Ok(())
-        }
-    }
-
-    impl<SPI, PINS, const BIDI: bool, W: FrameSize + 'static> SpiBusRead<W> for Spi<SPI, PINS, BIDI, W>
-    where
-        SPI: Instance,
-    {
         fn read(&mut self, words: &mut [W]) -> Result<(), Self::Error> {
-            for word in words {
-                nb::block!(<Self as FullDuplex<W>>::write(self, W::default()))?;
-                *word = nb::block!(<Self as FullDuplex<W>>::read(self))?;
-            }
+            self.read(words)
+        }
 
+        fn write(&mut self, words: &[W]) -> Result<(), Self::Error> {
+            self.write(words)
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
             Ok(())
         }
     }
