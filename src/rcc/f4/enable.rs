@@ -276,7 +276,12 @@ bus_lpenable!(ADC3 => 10);
 #[cfg(feature = "adc3")]
 bus_reset!(ADC3 => 8);
 
-#[cfg(feature = "stm32f413")]
+#[cfg(any(
+    feature = "gpio-f413",
+    feature = "gpio-f469",
+    feature = "stm32f429",
+    feature = "stm32f439"
+))]
 bus! {
     SAI => (APB2, 22),
 }
@@ -356,4 +361,8 @@ bus! {
 #[cfg(feature = "dma2d")]
 bus! {
     DMA2D => (AHB1, 23),
+}
+#[cfg(feature = "dsihost")]
+bus! {
+    DSI => (APB2, 27),
 }

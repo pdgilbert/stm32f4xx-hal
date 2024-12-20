@@ -633,9 +633,12 @@ pub mod eth {
     }
 }
 
+#[cfg(any(feature = "fmc", feature = "fsmc"))]
+pub use fmc as fsmc;
+
 /// Pins available on all STM32F4 models that have an FSMC/FMC
 #[cfg(any(feature = "fmc", feature = "fsmc"))]
-pub mod fsmc {
+pub mod fmc {
     use super::*;
 
     pub use Ne1 as ChipSelect1;
@@ -2502,7 +2505,7 @@ pub mod sai1 {
             PF9<7>,
         ],
 
-        <MclkA, PushPull> for [
+        <MclkA, PushPull> for no:NoPin, [
             #[cfg(feature = "gpio-f413")]
             PA15<10>,
 
@@ -2516,7 +2519,7 @@ pub mod sai1 {
             PG7<6>,
         ],
 
-        <MclkB, PushPull> for [
+        <MclkB, PushPull> for no:NoPin, [
             #[cfg(feature = "gpio-f446")]
             PC0<6>,
 
@@ -2611,19 +2614,18 @@ pub mod sai1 {
     use crate::pac::SAI;
     #[cfg(any(feature = "stm32f427", feature = "stm32f437", feature = "gpio-f446"))]
     use crate::pac::SAI1 as SAI;
-    pub struct ChannelA;
-    pub struct ChannelB;
+    pub use crate::sai::{SAI1A, SAI1B};
     impl SaiChannels for SAI {
-        type A = ChannelA;
-        type B = ChannelB;
+        type A = SAI1A;
+        type B = SAI1B;
     }
-    impl SaiChannel for ChannelA {
+    impl SaiChannel for SAI1A {
         type Fs = FsA;
         type Mclk = MclkA;
         type Sck = SckA;
         type Sd = SdA;
     }
-    impl SaiChannel for ChannelB {
+    impl SaiChannel for SAI1B {
         type Fs = FsB;
         type Mclk = MclkB;
         type Sck = SckB;
@@ -2686,19 +2688,18 @@ pub mod sai2 {
     }
 
     use crate::pac::SAI2 as SAI;
-    pub struct ChannelA;
-    pub struct ChannelB;
+    pub use crate::sai::{SAI2A, SAI2B};
     impl SaiChannels for SAI {
-        type A = ChannelA;
-        type B = ChannelB;
+        type A = SAI2A;
+        type B = SAI2B;
     }
-    impl SaiChannel for ChannelA {
+    impl SaiChannel for SAI2A {
         type Fs = FsA;
         type Mclk = MclkA;
         type Sck = SckA;
         type Sd = SdA;
     }
-    impl SaiChannel for ChannelB {
+    impl SaiChannel for SAI2B {
         type Fs = FsB;
         type Mclk = MclkB;
         type Sck = SckB;
@@ -4049,7 +4050,7 @@ pub mod usart1 {
     impl SerialSync for USART {
         type Ck = Ck;
     }
-    impl SerialRs232 for USART {
+    impl SerialFlowControl for USART {
         type Cts = Cts;
         type Rts = Rts;
     }
@@ -4105,7 +4106,7 @@ pub mod usart2 {
     impl SerialSync for USART {
         type Ck = Ck;
     }
-    impl SerialRs232 for USART {
+    impl SerialFlowControl for USART {
         type Cts = Cts;
         type Rts = Rts;
     }
@@ -4184,7 +4185,7 @@ pub mod usart3 {
     impl SerialSync for USART {
         type Ck = Ck;
     }
-    impl SerialRs232 for USART {
+    impl SerialFlowControl for USART {
         type Cts = Cts;
         type Rts = Rts;
     }
@@ -4295,7 +4296,7 @@ pub mod usart6 {
         feature = "gpio-f446",
         feature = "gpio-f469"
     ))]
-    impl SerialRs232 for USART {
+    impl SerialFlowControl for USART {
         type Cts = Cts;
         type Rts = Rts;
     }
@@ -4357,7 +4358,7 @@ pub mod uart4 {
         type Tx<Otype> = Tx<Otype>;
     }
     #[cfg(feature = "gpio-f446")]
-    impl SerialRs232 for UART {
+    impl SerialFlowControl for UART {
         type Cts = Cts;
         type Rts = Rts;
     }
@@ -4418,7 +4419,7 @@ pub mod uart5 {
         type Tx<Otype> = Tx<Otype>;
     }
     #[cfg(feature = "gpio-f446")]
-    impl SerialRs232 for UART {
+    impl SerialFlowControl for UART {
         type Cts = Cts;
         type Rts = Rts;
     }

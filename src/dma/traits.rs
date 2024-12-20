@@ -302,22 +302,27 @@ use address;
 pub type DMARegisterBlock = pac::dma1::RegisterBlock;
 
 /// Trait that represents an instance of a DMA peripheral.
-pub trait Instance: Deref<Target = DMARegisterBlock> + crate::Sealed {
-    /// Gives a pointer to the RegisterBlock.
-    fn ptr() -> *const DMARegisterBlock;
+pub trait Instance:
+    crate::Sealed + crate::Ptr<RB = DMARegisterBlock> + Deref<Target = Self::RB>
+{
 }
 
-impl Instance for DMA1 {
+impl Instance for DMA1 {}
+impl Instance for DMA2 {}
+
+impl crate::Ptr for DMA1 {
+    type RB = DMARegisterBlock;
     #[inline(always)]
-    fn ptr() -> *const DMARegisterBlock {
-        DMA1::ptr()
+    fn ptr() -> *const Self::RB {
+        Self::ptr()
     }
 }
 
-impl Instance for DMA2 {
+impl crate::Ptr for DMA2 {
+    type RB = DMARegisterBlock;
     #[inline(always)]
-    fn ptr() -> *const DMARegisterBlock {
-        DMA2::ptr()
+    fn ptr() -> *const Self::RB {
+        Self::ptr()
     }
 }
 
@@ -355,12 +360,7 @@ pub struct FLT<T, const F: u8> {
 impl<T, const F: u8> crate::Sealed for FLT<T, F> {}
 
 #[cfg(feature = "sai")]
-pub struct SAICH<T, const C: u8> {
-    _per: PhantomData<T>,
-}
-
-#[cfg(feature = "sai")]
-impl<T, const C: u8> crate::Sealed for SAICH<T, C> {}
+pub use crate::sai::SAICH;
 
 dma_map!(
     (Stream0<DMA2>:0, MemoryToMemory<u8>, [MemoryToMemory<u8> | MemoryToMemory<u16> | MemoryToMemory<u32>]),

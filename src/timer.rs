@@ -306,6 +306,9 @@ pub enum Ocm {
     PwmMode2 = 7,
 }
 
+// Center-aligned mode selection
+pub use pac::tim1::cr1::CMS as CenterAlignedMode;
+
 /// Wrapper type that indicates which register of the contained timer to use for DMA.
 pub struct CCR<T, const C: u8>(T);
 pub type CCR1<T> = CCR<T, 0>;
@@ -317,7 +320,7 @@ pub type CCR4<T> = CCR<T, 3>;
 pub struct DMAR<T>(T);
 
 mod sealed {
-    use super::{BitFlags, Channel, Event, Flag, IdleState, Ocm, Polarity};
+    use super::{BitFlags, CenterAlignedMode, Event, Flag, IdleState, Ocm, Polarity};
     pub trait General {
         type Width: Into<u32> + From<u16>;
         fn max_auto_reload() -> u32;
@@ -361,10 +364,12 @@ mod sealed {
         fn set_dtg_value(value: u8);
         fn read_dtg_value() -> u8;
         fn idle_state(channel: u8, comp: bool, s: IdleState);
+        fn set_cms(mode: CenterAlignedMode);
     }
 
     pub trait WithPwm: WithPwmCommon {
-        fn preload_output_channel_in_mode(&mut self, channel: Channel, mode: Ocm);
+        fn preload_output_channel_in_mode(&mut self, c: u8, mode: Ocm);
+        fn freeze_output_channel(&mut self, c: u8);
         fn start_pwm(&mut self);
     }
 
@@ -372,12 +377,38 @@ mod sealed {
         type Mms;
         fn master_mode(&mut self, mode: Self::Mms);
     }
+
+    pub trait Split {
+        type Channels;
+        fn split() -> Self::Channels;
+    }
 }
 pub(crate) use sealed::{Advanced, General, MasterTimer, WithPwm, WithPwmCommon};
 
 pub trait Instance:
     crate::Sealed + rcc::Enable + rcc::Reset + rcc::BusTimerClock + General
 {
+}
+
+use sealed::Split;
+macro_rules! split {
+    ($TIM:ty: 1) => {
+        split!($TIM, C1);
+    };
+    ($TIM:ty: 2) => {
+        split!($TIM, C1, C2);
+    };
+    ($TIM:ty: 4) => {
+        split!($TIM, C1, C2, C3, C4);
+    };
+    ($TIM:ty, $($C:ident),+) => {
+        impl Split for $TIM {
+            type Channels = ($(PwmChannelDisabled<$TIM, $C>,)+);
+            fn split() -> Self::Channels {
+                ($(PwmChannelDisabled::<_, $C>::new(),)+)
+            }
+        }
+    };
 }
 
 macro_rules! hal {
@@ -389,6 +420,11 @@ macro_rules! hal {
         $(m: $timbase:ident,)?
     ]) => {
         impl Instance for $TIM { }
+        impl crate::Steal for $TIM {
+            unsafe fn steal() -> Self {
+                Self::steal()
+            }
+        }
         pub type $Timer = Timer<$TIM>;
 
         impl General for $TIM {
@@ -400,7 +436,7 @@ macro_rules! hal {
             }
             #[inline(always)]
             unsafe fn set_auto_reload_unchecked(&mut self, arr: u32) {
-                self.arr().write(|w| w.bits(arr))
+                self.arr().write(|w| w.bits(arr));
             }
             #[inline(always)]
             fn set_auto_reload(&mut self, arr: u32) -> Result<(), Error> {
@@ -474,9 +510,7 @@ macro_rules! hal {
             }
             #[inline(always)]
             fn write_count(&mut self, value:Self::Width) {
-                //TODO: remove "unsafe" when possible
-                #[allow(unused_unsafe)]
-                self.cnt().write(|w|unsafe{w.cnt().bits(value)});
+                self.cnt().write(|w| unsafe { w.cnt().bits(value) });
             }
             #[inline(always)]
             fn start_one_pulse(&mut self) {
@@ -517,8 +551,7 @@ macro_rules! hal {
                 fn set_cc_value(c: u8, value: u32) {
                     let tim = unsafe { &*<$TIM>::ptr() };
                     if c < Self::CH_NUMBER {
-                        #[allow(unused_unsafe)]
-                        tim.ccr(c as usize).write(|w| unsafe { w.bits(value) })
+                        tim.ccr(c as usize).write(|w| unsafe { w.bits(value) });
                     }
                 }
 
@@ -576,10 +609,16 @@ macro_rules! hal {
                             }
                         }
                     }
+                    #[inline(always)]
+                    fn set_cms(cms: CenterAlignedMode) {
+                        let tim = unsafe { &*<$TIM>::ptr() };
+                        tim.cr1().write(|w| w.cms().variant(cms));
+                    }
                 }
             )?
 
             with_pwm!($TIM: $cnum $(, $aoe)?);
+            split!($TIM: $cnum);
             unsafe impl<const C: u8> PeriAddress for CCR<$TIM, C> {
                 #[inline(always)]
                 fn address(&self) -> u32 {
@@ -614,13 +653,13 @@ macro_rules! with_dmar {
 }
 
 macro_rules! with_pwm {
-    ($TIM:ty: [$($Cx:ident, $ccmrx_output:ident, $ocxpe:ident, $ocxm:ident;)+] $(, $aoe:ident)?) => {
+    ($TIM:ty: [$($Cx:literal, $ccmrx_output:ident, $ocxpe:ident, $ocxm:ident;)+] $(, $aoe:ident)?) => {
         impl WithPwm for $TIM {
             #[inline(always)]
-            fn preload_output_channel_in_mode(&mut self, channel: Channel, mode: Ocm) {
-                match channel {
+            fn preload_output_channel_in_mode(&mut self, c: u8, mode: Ocm) {
+                match c {
                     $(
-                        Channel::$Cx => {
+                        $Cx => {
                             self.$ccmrx_output()
                             .modify(|_, w| w.$ocxpe().set_bit().$ocxm().set(mode as _) );
                         }
@@ -628,6 +667,18 @@ macro_rules! with_pwm {
                     #[allow(unreachable_patterns)]
                     _ => {},
                 }
+            }
+            fn freeze_output_channel(&mut self, c: u8) {
+                match c {
+                        $(
+                            $Cx => {
+                                self.$ccmrx_output()
+                                .modify(|_, w| w.$ocxpe().clear_bit().$ocxm().set(Ocm::Frozen as _) );
+                            }
+                        )+
+                        #[allow(unreachable_patterns)]
+                        _ => {},
+                    }
             }
 
             #[inline(always)]
@@ -639,21 +690,21 @@ macro_rules! with_pwm {
     };
     ($TIM:ty: 1) => {
         with_pwm!($TIM: [
-            C1, ccmr1_output, oc1pe, oc1m;
+            0, ccmr1_output, oc1pe, oc1m;
         ]);
     };
     ($TIM:ty: 2) => {
         with_pwm!($TIM: [
-            C1, ccmr1_output, oc1pe, oc1m;
-            C2, ccmr1_output, oc2pe, oc2m;
+            0, ccmr1_output, oc1pe, oc1m;
+            1, ccmr1_output, oc2pe, oc2m;
         ]);
     };
     ($TIM:ty: 4 $(, $aoe:ident)?) => {
         with_pwm!($TIM: [
-            C1, ccmr1_output, oc1pe, oc1m;
-            C2, ccmr1_output, oc2pe, oc2m;
-            C3, ccmr2_output, oc3pe, oc3m;
-            C4, ccmr2_output, oc4pe, oc4m;
+            0, ccmr1_output, oc1pe, oc1m;
+            1, ccmr1_output, oc2pe, oc2m;
+            2, ccmr2_output, oc3pe, oc3m;
+            3, ccmr2_output, oc4pe, oc4m;
         ] $(, $aoe)?);
     };
 }

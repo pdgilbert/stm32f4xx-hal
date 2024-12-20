@@ -55,6 +55,8 @@ pub use crate::dma::traits::DmaEventExt as _;
 pub use crate::dma::traits::DmaFlagExt as _;
 pub use crate::dma::traits::Stream as _;
 pub use crate::dma::traits::StreamISR as _;
+#[cfg(feature = "fmpi2c1")]
+pub use crate::fmpi2c::I2cExt as _;
 pub use crate::gpio::outport::OutPort as _;
 pub use crate::gpio::ExtiPin as _stm32f4xx_hal_gpio_ExtiPin;
 pub use crate::gpio::GpioExt as _stm32f4xx_hal_gpio_GpioExt;
@@ -68,6 +70,8 @@ pub use crate::qei::QeiExt as _stm32f4xx_hal_QeiExt;
 pub use crate::rcc::RccExt as _stm32f4xx_hal_rcc_RccExt;
 #[cfg(feature = "rng")]
 pub use crate::rng::RngExt as _stm32f4xx_hal_rng_RngExt;
+#[cfg(feature = "sai")]
+pub use crate::sai::SAIExt as _;
 pub use crate::serial::dma::SerialHandleIT as _stm32f4xx_hal_serial_dma_SerialHandleIT;
 pub use crate::serial::dma::SerialReadDMA as _stm32f4xx_hal_serial_dma_SerialReadDMA;
 pub use crate::serial::dma::SerialWriteDMA as _stm32f4xx_hal_serial_dma_SerialWriteDMA;

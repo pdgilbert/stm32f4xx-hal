@@ -183,7 +183,8 @@ pub struct Serial<USART: CommonPins, WORD = u8> {
 
 /// Serial receiver containing RX pin
 pub struct Rx<USART: CommonPins, WORD = u8> {
-    _word: PhantomData<(USART, WORD)>,
+    _word: PhantomData<WORD>,
+    usart: USART,
     pin: USART::Rx<PushPull>,
 }
 
@@ -209,7 +210,11 @@ pub trait SerialExt: Sized + Instance {
         clocks: &Clocks,
     ) -> Result<Tx<Self, WORD>, config::InvalidConfig>
     where
-        NoPin: Into<Self::Rx<PushPull>>;
+        NoPin: Into<Self::Rx<PushPull>>,
+    {
+        self.serial((tx_pin, NoPin::new()), config, clocks)
+            .map(|s| s.split().0)
+    }
 
     fn rx<WORD>(
         self,
@@ -218,7 +223,11 @@ pub trait SerialExt: Sized + Instance {
         clocks: &Clocks,
     ) -> Result<Rx<Self, WORD>, config::InvalidConfig>
     where
-        NoPin: Into<Self::Tx<PushPull>>;
+        NoPin: Into<Self::Tx<PushPull>>,
+    {
+        self.serial((NoPin::new(), rx_pin), config, clocks)
+            .map(|s| s.split().1)
+    }
 }
 
 impl<USART: Instance, WORD> Serial<USART, WORD> {
@@ -230,11 +239,8 @@ impl<USART: Instance, WORD> Serial<USART, WORD> {
         ),
         config: impl Into<config::Config>,
         clocks: &Clocks,
-    ) -> Result<Self, config::InvalidConfig>
-    where
-        <USART as Instance>::RegisterBlock: uart_impls::RegisterBlockImpl,
-    {
-        <USART as Instance>::RegisterBlock::new(usart, pins, config, clocks)
+    ) -> Result<Self, config::InvalidConfig> {
+        <USART as crate::Ptr>::RB::new(usart, pins, config, clocks)
     }
 }
 
@@ -256,12 +262,6 @@ macro_rules! halUsart {
         pub type $Rx<WORD = u8> = Rx<$USART, WORD>;
 
         impl Instance for $USART {
-            type RegisterBlock = crate::serial::uart_impls::RegisterBlockUsart;
-
-            fn ptr() -> *const crate::serial::uart_impls::RegisterBlockUsart {
-                <$USART>::ptr() as *const _
-            }
-
             fn set_stopbits(&self, bits: config::StopBits) {
                 use crate::pac::usart1::cr2::STOP;
                 use config::StopBits;
@@ -275,9 +275,19 @@ macro_rules! halUsart {
                     })
                 });
             }
+        }
 
-            fn peri_address() -> u32 {
-                unsafe { (*(<$USART>::ptr() as *const Self::RegisterBlock)).peri_address() }
+        impl crate::Ptr for $USART {
+            type RB = crate::serial::uart_impls::RegisterBlockUsart;
+
+            fn ptr() -> *const Self::RB {
+                Self::ptr()
+            }
+        }
+
+        impl crate::Steal for $USART {
+            unsafe fn steal() -> Self {
+                Self::steal()
             }
         }
     };
@@ -293,13 +303,13 @@ halUsart! { pac::USART3, Serial3, Rx3, Tx3 }
 
 impl<UART: CommonPins> Rx<UART, u8> {
     pub(crate) fn with_u16_data(self) -> Rx<UART, u16> {
-        Rx::new(self.pin)
+        Rx::new(self.usart, self.pin)
     }
 }
 
 impl<UART: CommonPins> Rx<UART, u16> {
     pub(crate) fn with_u8_data(self) -> Rx<UART, u8> {
-        Rx::new(self.pin)
+        Rx::new(self.usart, self.pin)
     }
 }
 
@@ -316,9 +326,10 @@ impl<UART: CommonPins> Tx<UART, u16> {
 }
 
 impl<UART: CommonPins, WORD> Rx<UART, WORD> {
-    pub(crate) fn new(pin: UART::Rx<PushPull>) -> Self {
+    pub(crate) fn new(usart: UART, pin: UART::Rx<PushPull>) -> Self {
         Self {
             _word: PhantomData,
+            usart,
             pin,
         }
     }

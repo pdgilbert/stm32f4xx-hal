@@ -105,8 +105,13 @@ pub mod otg_hs;
 pub mod rng;
 
 pub mod dma;
+#[cfg(feature = "dsihost")]
+pub mod dsi;
 pub mod dwt;
 pub mod flash;
+#[cfg(any(feature = "fmc", feature = "fsmc"))]
+#[cfg(feature = "stm32-fmc")]
+pub mod fmc;
 #[cfg(all(feature = "fsmc_lcd", any(feature = "fmc", feature = "fsmc")))]
 pub mod fsmc_lcd;
 #[cfg(all(feature = "dma2d", feature = "ltdc"))]
@@ -117,6 +122,8 @@ pub mod qei;
 pub mod qspi;
 pub mod rcc;
 pub mod rtc;
+#[cfg(feature = "sai")]
+pub mod sai;
 #[cfg(all(feature = "sdio-host", feature = "sdio"))]
 pub mod sdio;
 pub mod serial;
@@ -194,5 +201,46 @@ pub trait Listen {
     #[inline(always)]
     fn unlisten_all(&mut self) {
         self.unlisten(BitFlags::ALL)
+    }
+}
+
+pub trait Ptr {
+    /// RegisterBlock structure
+    type RB;
+    /// Return the pointer to the register block
+    fn ptr() -> *const Self::RB;
+}
+
+pub trait Steal {
+    /// Steal an instance of this peripheral
+    ///
+    /// # Safety
+    ///
+    /// Ensure that the new instance of the peripheral cannot be used in a way
+    /// that may race with any existing instances, for example by only
+    /// accessing read-only or write-only registers, or by consuming the
+    /// original peripheral and using critical sections to coordinate
+    /// access between multiple new instances.
+    ///
+    /// Additionally the HAL may rely on only one
+    /// peripheral instance existing to ensure memory safety; ensure
+    /// no stolen instances are passed to such software.
+    unsafe fn steal() -> Self;
+}
+
+#[allow(unused)]
+const fn max_u32(first: u32, second: u32) -> u32 {
+    if second > first {
+        second
+    } else {
+        first
+    }
+}
+
+const fn min_u32(first: u32, second: u32) -> u32 {
+    if second < first {
+        second
+    } else {
+        first
     }
 }

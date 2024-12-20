@@ -1,4 +1,4 @@
-use core::{fmt, ops::Deref};
+use core::fmt;
 
 use enumflags2::BitFlags;
 use nb::block;
@@ -22,20 +22,28 @@ impl crate::Sealed for RegisterBlockUart {}
 impl crate::Sealed for RegisterBlockUsart {}
 
 // Implemented by all USART/UART instances
-pub trait Instance: crate::Sealed + rcc::Enable + rcc::Reset + rcc::BusClock + CommonPins {
-    type RegisterBlock: RegisterBlockImpl;
-
-    #[doc(hidden)]
-    fn ptr() -> *const Self::RegisterBlock;
+pub trait Instance:
+    crate::Sealed
+    + crate::Ptr<RB: RegisterBlockImpl>
+    + crate::Steal
+    + core::ops::Deref<Target = Self::RB>
+    + rcc::Enable
+    + rcc::Reset
+    + rcc::BusClock
+    + CommonPins
+{
     #[doc(hidden)]
     fn set_stopbits(&self, bits: config::StopBits);
     #[doc(hidden)]
-    fn peri_address() -> u32;
+    #[inline(always)]
+    fn peri_address() -> u32 {
+        unsafe { &*Self::ptr() }.peri_address()
+    }
 }
 
 pub trait RegisterBlockImpl: crate::Sealed {
     #[allow(clippy::new_ret_no_self)]
-    fn new<UART: Instance<RegisterBlock = Self>, WORD>(
+    fn new<UART: Instance + crate::Ptr<RB = Self>, WORD>(
         uart: UART,
         pins: (impl Into<UART::Tx<PushPull>>, impl Into<UART::Rx<PushPull>>),
         config: impl Into<config::Config>,
@@ -137,6 +145,10 @@ pub trait RegisterBlockImpl: crate::Sealed {
 
     // PeriAddress
     fn peri_address(&self) -> u32;
+
+    fn enable_dma(&self, dc: config::DmaConfig);
+
+    fn calculate_brr(pclk_freq: u32, baud: u32) -> Result<(bool, u32), config::InvalidConfig>;
 }
 
 macro_rules! uartCommon {
@@ -251,11 +263,78 @@ macro_rules! uartCommon {
         fn peri_address(&self) -> u32 {
             self.dr().as_ptr() as u32
         }
+
+        fn enable_dma(&self, dc: config::DmaConfig) {
+            use config::DmaConfig;
+            match dc {
+                DmaConfig::Tx => {
+                    self.cr3().write(|w| w.dmat().enabled());
+                }
+                DmaConfig::Rx => {
+                    self.cr3().write(|w| w.dmar().enabled());
+                }
+                DmaConfig::TxRx => {
+                    self.cr3().write(|w| w.dmar().enabled().dmat().enabled());
+                }
+                DmaConfig::None => {}
+            }
+        }
+
+        fn calculate_brr(pclk_freq: u32, baud: u32) -> Result<(bool, u32), config::InvalidConfig> {
+            // The frequency to calculate USARTDIV is this:
+            //
+            // (Taken from STM32F411xC/E Reference Manual,
+            // Section 19.3.4, Equation 1)
+            //
+            // 16 bit oversample: OVER8 = 0
+            // 8 bit oversample:  OVER8 = 1
+            //
+            // USARTDIV =          (pclk)
+            //            ------------------------
+            //            8 x (2 - OVER8) x (baud)
+            //
+            // BUT, the USARTDIV has 4 "fractional" bits, which effectively
+            // means that we need to "correct" the equation as follows:
+            //
+            // USARTDIV =      (pclk) * 16
+            //            ------------------------
+            //            8 x (2 - OVER8) x (baud)
+            //
+            // When OVER8 is enabled, we can only use the lowest three
+            // fractional bits, so we'll need to shift those last four bits
+            // right one bit
+
+            // Calculate correct baudrate divisor on the fly
+            if (pclk_freq / 16) >= baud {
+                // We have the ability to oversample to 16 bits, take
+                // advantage of it.
+                //
+                // We also add `baud / 2` to the `pclk_freq` to ensure
+                // rounding of values to the closest scale, rather than the
+                // floored behavior of normal integer division.
+                let div = (pclk_freq + (baud / 2)) / baud;
+                Ok((false, div))
+            } else if (pclk_freq / 8) >= baud {
+                // We are close enough to pclk where we can only
+                // oversample 8.
+                //
+                // See note above regarding `baud` and rounding.
+                let div = ((pclk_freq * 2) + (baud / 2)) / baud;
+
+                // Ensure the the fractional bits (only 3) are
+                // right-aligned.
+                let frac = div & 0xF;
+                let div = (div & !0xF) | (frac >> 1);
+                Ok((true, div))
+            } else {
+                Err(config::InvalidConfig)
+            }
+        }
     };
 }
 
 impl RegisterBlockImpl for RegisterBlockUsart {
-    fn new<UART: Instance<RegisterBlock = Self>, WORD>(
+    fn new<UART: Instance + crate::Ptr<RB = Self>, WORD>(
         uart: UART,
         pins: (impl Into<UART::Tx<PushPull>>, impl Into<UART::Rx<PushPull>>),
         config: impl Into<config::Config>,
@@ -274,95 +353,36 @@ where {
         let pclk_freq = UART::clock(clocks).raw();
         let baud = config.baudrate.0;
 
-        // The frequency to calculate USARTDIV is this:
-        //
-        // (Taken from STM32F411xC/E Reference Manual,
-        // Section 19.3.4, Equation 1)
-        //
-        // 16 bit oversample: OVER8 = 0
-        // 8 bit oversample:  OVER8 = 1
-        //
-        // USARTDIV =          (pclk)
-        //            ------------------------
-        //            8 x (2 - OVER8) x (baud)
-        //
-        // BUT, the USARTDIV has 4 "fractional" bits, which effectively
-        // means that we need to "correct" the equation as follows:
-        //
-        // USARTDIV =      (pclk) * 16
-        //            ------------------------
-        //            8 x (2 - OVER8) x (baud)
-        //
-        // When OVER8 is enabled, we can only use the lowest three
-        // fractional bits, so we'll need to shift those last four bits
-        // right one bit
-        //
-        // In IrDA Smartcard, LIN, and IrDA modes, OVER8 is always disabled.
-        //
-        // (Taken from STM32F411xC/E Reference Manual,
-        // Section 19.3.4, Equation 2)
-        //
-        // USARTDIV =   pclk
-        //            ---------
-        //            16 x baud
-        //
-        // With reference to the above, OVER8 == 0 when in Smartcard, LIN, and
-        // IrDA modes, so the register value needed for USARTDIV is the same
-        // as for 16 bit oversampling.
-
-        // Calculate correct baudrate divisor on the fly
-        let (over8, div) = if (pclk_freq / 16) >= baud || config.irda != IrdaMode::None {
-            // We have the ability to oversample to 16 bits, take
-            // advantage of it.
-            //
-            // We also add `baud / 2` to the `pclk_freq` to ensure
-            // rounding of values to the closest scale, rather than the
-            // floored behavior of normal integer division.
+        let (over8, div) = if config.irda != IrdaMode::None {
             let div = (pclk_freq + (baud / 2)) / baud;
             (false, div)
-        } else if (pclk_freq / 8) >= baud {
-            // We are close enough to pclk where we can only
-            // oversample 8.
-            //
-            // See note above regarding `baud` and rounding.
-            let div = ((pclk_freq * 2) + (baud / 2)) / baud;
-
-            // Ensure the the fractional bits (only 3) are
-            // right-aligned.
-            let frac = div & 0xF;
-            let div = (div & !0xF) | (frac >> 1);
-            (true, div)
         } else {
-            return Err(config::InvalidConfig);
+            Self::calculate_brr(pclk_freq, baud)?
         };
 
-        let register_block = unsafe { &*UART::ptr() };
-        register_block.brr().write(|w| unsafe { w.bits(div) });
+        uart.brr().write(|w| unsafe { w.bits(div) });
 
         // Reset other registers to disable advanced USART features
-        register_block.cr2().reset();
-        register_block.cr3().reset(); // IrDA configuration - see STM32F411xC/E (RM0383) sections:
-                                      // 19.3.12 "IrDA SIR ENDEC block"
-                                      // 19.6.7 "Guard time and prescaler register (USART_GTPR)"
+        uart.cr2().reset();
+        uart.cr3().reset(); // IrDA configuration - see STM32F411xC/E (RM0383) sections:
+                            // 19.3.12 "IrDA SIR ENDEC block"
+                            // 19.6.7 "Guard time and prescaler register (USART_GTPR)"
         if config.irda != IrdaMode::None && config.stopbits != StopBits::STOP1 {
             return Err(config::InvalidConfig);
         }
 
         match config.irda {
             IrdaMode::Normal => unsafe {
-                register_block.gtpr().reset();
-                register_block.cr3().write(|w| w.iren().enabled());
-                register_block.gtpr().write(|w| w.psc().bits(1u8))
+                uart.gtpr().reset();
+                uart.cr3().write(|w| w.iren().enabled());
+                uart.gtpr().write(|w| w.psc().bits(1u8));
             },
             IrdaMode::LowPower => unsafe {
-                register_block.gtpr().reset();
-                register_block
-                    .cr3()
-                    .write(|w| w.iren().enabled().irlp().low_power());
+                uart.gtpr().reset();
+                uart.cr3().write(|w| w.iren().enabled().irlp().low_power());
                 // FIXME
-                register_block
-                    .gtpr()
-                    .write(|w| w.psc().bits((1843200u32 / pclk_freq) as u8))
+                uart.gtpr()
+                    .write(|w| w.psc().bits((1843200u32 / pclk_freq) as u8));
             },
             IrdaMode::None => {}
         }
@@ -370,7 +390,7 @@ where {
         // Enable transmission and receiving
         // and configure frame
 
-        register_block.cr1().write(|w| {
+        uart.cr1().write(|w| {
             w.ue().set_bit();
             w.over8().bit(over8);
             w.te().set_bit();
@@ -380,18 +400,11 @@ where {
             w.ps().bit(config.parity == Parity::ParityOdd)
         });
 
-        match config.dma {
-            DmaConfig::Tx => register_block.cr3().write(|w| w.dmat().enabled()),
-            DmaConfig::Rx => register_block.cr3().write(|w| w.dmar().enabled()),
-            DmaConfig::TxRx => register_block
-                .cr3()
-                .write(|w| w.dmar().enabled().dmat().enabled()),
-            DmaConfig::None => {}
-        }
+        uart.enable_dma(config.dma);
 
         let serial = Serial {
             tx: Tx::new(uart, pins.0.into()),
-            rx: Rx::new(pins.1.into()),
+            rx: Rx::new(unsafe { UART::steal() }, pins.1.into()),
         };
         serial.tx.usart.set_stopbits(config.stopbits);
         Ok(serial)
@@ -402,7 +415,7 @@ where {
 
 #[cfg(feature = "uart4")]
 impl RegisterBlockImpl for RegisterBlockUart {
-    fn new<UART: Instance<RegisterBlock = Self>, WORD>(
+    fn new<UART: Instance + crate::Ptr<RB = Self>, WORD>(
         uart: UART,
         pins: (impl Into<UART::Tx<PushPull>>, impl Into<UART::Rx<PushPull>>),
         config: impl Into<config::Config>,
@@ -421,66 +434,18 @@ where {
         let pclk_freq = UART::clock(clocks).raw();
         let baud = config.baudrate.0;
 
-        // The frequency to calculate USARTDIV is this:
-        //
-        // (Taken from STM32F411xC/E Reference Manual,
-        // Section 19.3.4, Equation 1)
-        //
-        // 16 bit oversample: OVER8 = 0
-        // 8 bit oversample:  OVER8 = 1
-        //
-        // USARTDIV =          (pclk)
-        //            ------------------------
-        //            8 x (2 - OVER8) x (baud)
-        //
-        // BUT, the USARTDIV has 4 "fractional" bits, which effectively
-        // means that we need to "correct" the equation as follows:
-        //
-        // USARTDIV =      (pclk) * 16
-        //            ------------------------
-        //            8 x (2 - OVER8) x (baud)
-        //
-        // When OVER8 is enabled, we can only use the lowest three
-        // fractional bits, so we'll need to shift those last four bits
-        // right one bit
+        let (over8, div) = Self::calculate_brr(pclk_freq, baud)?;
 
-        // Calculate correct baudrate divisor on the fly
-        let (over8, div) = if (pclk_freq / 16) >= baud {
-            // We have the ability to oversample to 16 bits, take
-            // advantage of it.
-            //
-            // We also add `baud / 2` to the `pclk_freq` to ensure
-            // rounding of values to the closest scale, rather than the
-            // floored behavior of normal integer division.
-            let div = (pclk_freq + (baud / 2)) / baud;
-            (false, div)
-        } else if (pclk_freq / 8) >= baud {
-            // We are close enough to pclk where we can only
-            // oversample 8.
-            //
-            // See note above regarding `baud` and rounding.
-            let div = ((pclk_freq * 2) + (baud / 2)) / baud;
-
-            // Ensure the the fractional bits (only 3) are
-            // right-aligned.
-            let frac = div & 0xF;
-            let div = (div & !0xF) | (frac >> 1);
-            (true, div)
-        } else {
-            return Err(config::InvalidConfig);
-        };
-
-        let register_block = unsafe { &*UART::ptr() };
-        register_block.brr().write(|w| unsafe { w.bits(div) });
+        uart.brr().write(|w| unsafe { w.bits(div) });
 
         // Reset other registers to disable advanced USART features
-        register_block.cr2().reset();
-        register_block.cr3().reset();
+        uart.cr2().reset();
+        uart.cr3().reset();
 
         // Enable transmission and receiving
         // and configure frame
 
-        register_block.cr1().write(|w| {
+        uart.cr1().write(|w| {
             w.ue().set_bit();
             w.over8().bit(over8);
             w.te().set_bit();
@@ -490,18 +455,11 @@ where {
             w.ps().bit(config.parity == Parity::ParityOdd)
         });
 
-        match config.dma {
-            DmaConfig::Tx => register_block.cr3().write(|w| w.dmat().enabled()),
-            DmaConfig::Rx => register_block.cr3().write(|w| w.dmar().enabled()),
-            DmaConfig::TxRx => register_block
-                .cr3()
-                .write(|w| w.dmar().enabled().dmat().enabled()),
-            DmaConfig::None => {}
-        }
+        uart.enable_dma(config.dma);
 
         let serial = Serial {
             tx: Tx::new(uart, pins.0.into()),
-            rx: Rx::new(pins.1.into()),
+            rx: Rx::new(unsafe { UART::steal() }, pins.1.into()),
         };
         serial.tx.usart.set_stopbits(config.stopbits);
         Ok(serial)
@@ -530,18 +488,16 @@ where
 
 impl<UART: Instance, WORD> RxISR for Rx<UART, WORD> {
     fn is_idle(&self) -> bool {
-        unsafe { (*UART::ptr()).is_idle() }
+        self.usart.is_idle()
     }
 
     fn is_rx_not_empty(&self) -> bool {
-        unsafe { (*UART::ptr()).is_rx_not_empty() }
+        self.usart.is_rx_not_empty()
     }
 
     /// This clears `Idle`, `Overrun`, `Noise`, `FrameError` and `ParityError` flags
     fn clear_idle_interrupt(&self) {
-        unsafe {
-            (*UART::ptr()).clear_idle_interrupt();
-        }
+        self.usart.clear_idle_interrupt();
     }
 }
 
@@ -554,10 +510,7 @@ where
     }
 }
 
-impl<UART: Instance, WORD> TxISR for Tx<UART, WORD>
-where
-    UART: Deref<Target = <UART as Instance>::RegisterBlock>,
-{
+impl<UART: Instance, WORD> TxISR for Tx<UART, WORD> {
     fn is_tx_empty(&self) -> bool {
         self.usart.is_tx_empty()
     }
@@ -565,26 +518,23 @@ where
 
 impl<UART: Instance, WORD> RxListen for Rx<UART, WORD> {
     fn listen(&mut self) {
-        unsafe { (*UART::ptr()).listen_rxne() }
+        self.usart.listen_rxne()
     }
 
     fn unlisten(&mut self) {
-        unsafe { (*UART::ptr()).unlisten_rxne() }
+        self.usart.unlisten_rxne()
     }
 
     fn listen_idle(&mut self) {
-        unsafe { (*UART::ptr()).listen_idle() }
+        self.usart.listen_idle()
     }
 
     fn unlisten_idle(&mut self) {
-        unsafe { (*UART::ptr()).unlisten_idle() }
+        self.usart.unlisten_idle()
     }
 }
 
-impl<UART: Instance, WORD> TxListen for Tx<UART, WORD>
-where
-    UART: Deref<Target = <UART as Instance>::RegisterBlock>,
-{
+impl<UART: Instance, WORD> TxListen for Tx<UART, WORD> {
     fn listen(&mut self) {
         self.usart.listen_txe()
     }
@@ -594,10 +544,7 @@ where
     }
 }
 
-impl<UART: Instance, WORD> crate::ClearFlags for Serial<UART, WORD>
-where
-    UART: Deref<Target = <UART as Instance>::RegisterBlock>,
-{
+impl<UART: Instance, WORD> crate::ClearFlags for Serial<UART, WORD> {
     type Flag = CFlag;
 
     #[inline(always)]
@@ -606,10 +553,7 @@ where
     }
 }
 
-impl<UART: Instance, WORD> crate::ReadFlags for Serial<UART, WORD>
-where
-    UART: Deref<Target = <UART as Instance>::RegisterBlock>,
-{
+impl<UART: Instance, WORD> crate::ReadFlags for Serial<UART, WORD> {
     type Flag = Flag;
 
     #[inline(always)]
@@ -618,10 +562,7 @@ where
     }
 }
 
-impl<UART: Instance, WORD> crate::Listen for Serial<UART, WORD>
-where
-    UART: Deref<Target = <UART as Instance>::RegisterBlock>,
-{
+impl<UART: Instance, WORD> crate::Listen for Serial<UART, WORD> {
     type Event = Event;
 
     #[inline(always)]
@@ -651,10 +592,7 @@ where
     }
 }
 
-impl<UART: Instance> fmt::Write for Tx<UART>
-where
-    UART: Deref<Target = <UART as Instance>::RegisterBlock>,
-{
+impl<UART: Instance> fmt::Write for Tx<UART> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         s.bytes()
             .try_for_each(|c| block!(self.usart.write_u8(c)))
@@ -670,28 +608,6 @@ impl<UART: Instance> SerialExt for UART {
         clocks: &Clocks,
     ) -> Result<Serial<Self, WORD>, config::InvalidConfig> {
         Serial::new(self, pins, config, clocks)
-    }
-    fn tx<WORD>(
-        self,
-        tx_pin: impl Into<Self::Tx<PushPull>>,
-        config: impl Into<config::Config>,
-        clocks: &Clocks,
-    ) -> Result<Tx<Self, WORD>, config::InvalidConfig>
-    where
-        NoPin: Into<Self::Rx<PushPull>>,
-    {
-        Serial::tx(self, tx_pin, config, clocks)
-    }
-    fn rx<WORD>(
-        self,
-        rx_pin: impl Into<Self::Rx<PushPull>>,
-        config: impl Into<config::Config>,
-        clocks: &Clocks,
-    ) -> Result<Rx<Self, WORD>, config::InvalidConfig>
-    where
-        NoPin: Into<Self::Tx<PushPull>>,
-    {
-        Serial::rx(self, rx_pin, config, clocks)
     }
 }
 
@@ -726,7 +642,7 @@ impl<UART: Instance, WORD> Serial<UART, WORD> {
 unsafe impl<UART: Instance> PeriAddress for Rx<UART, u8> {
     #[inline(always)]
     fn address(&self) -> u32 {
-        unsafe { (*UART::ptr()).peri_address() }
+        self.usart.peri_address()
     }
 
     type MemSize = u8;
@@ -739,10 +655,7 @@ where
 {
 }
 
-unsafe impl<UART: Instance> PeriAddress for Tx<UART, u8>
-where
-    UART: Deref<Target = <UART as Instance>::RegisterBlock>,
-{
+unsafe impl<UART: Instance> PeriAddress for Tx<UART, u8> {
     #[inline(always)]
     fn address(&self) -> u32 {
         self.usart.peri_address()

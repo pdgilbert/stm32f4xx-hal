@@ -4,7 +4,7 @@ stm32f4xx-hal
 [![Crates.io](https://img.shields.io/crates/d/stm32f4xx-hal.svg)](https://crates.io/crates/stm32f4xx-hal)
 [![Crates.io](https://img.shields.io/crates/v/stm32f4xx-hal.svg)](https://crates.io/crates/stm32f4xx-hal)
 [![Released API docs](https://docs.rs/stm32f4xx-hal/badge.svg)](https://docs.rs/stm32f4xx-hal)
-![Minimum Supported Rust Version](https://img.shields.io/badge/rustc-1.60+-blue.svg)
+![Minimum Supported Rust Version](https://img.shields.io/badge/rustc-1.62+-blue.svg)
 [![dependency status](https://deps.rs/repo/github/stm32-rs/stm32f4xx-hal/status.svg)](https://deps.rs/repo/github/stm32-rs/stm32f4xx-hal)
 [![Continuous integration](https://github.com/stm32-rs/stm32f4xx-hal/workflows/Continuous%20integration/badge.svg)](https://github.com/stm32-rs/stm32f4xx-hal)
 
@@ -56,6 +56,7 @@ single model.
 * `usb_fs` or `usb_hs` — USB OTG FS/HS peripheral support. See [synopsys-usb-otg](https://crates.io/crates/synopsys-usb-otg).
 * `fsmc_lcd` — LCD support via FMC/FSMC peripheral. See [display-interface](https://crates.io/crates/display-interface).
 * `sdio-host` — SDIO peripheral support. See [sdio-host](https://crates.io/crates/sdio-host).
+* `dsihost` — DSI host support. See [embedded-display-controller](https://crates.io/crates/embedded-display-controller).
 
 Collaboration on this crate is highly welcome as are pull requests!
 
@@ -96,7 +97,7 @@ cortex-m-rt = "0.7"
 panic-halt = "0.2"
 
 [dependencies.stm32f4xx-hal]
-version = "0.21.0"
+version = "0.22.1"
 features = ["stm32f407"] # replace the model of your microcontroller here
                          # and add other required features
 ```

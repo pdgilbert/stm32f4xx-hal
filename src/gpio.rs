@@ -27,14 +27,14 @@
 //! - **Dynamic**: Pin mode is selected at runtime. See changing configurations for more details
 //! - Input
 //!     - **PullUp**: Input connected to high with a weak pull up resistor. Will be high when nothing
-//!     is connected
+//!       is connected
 //!     - **PullDown**: Input connected to high with a weak pull up resistor. Will be low when nothing
-//!     is connected
+//!       is connected
 //!     - **Floating**: Input not pulled to high or low. Will be undefined when nothing is connected
 //! - Output
 //!     - **PushPull**: Output which either drives the pin high or low
 //!     - **OpenDrain**: Output which leaves the gate floating, or pulls it do ground in drain
-//!     mode. Can be used as an input in the `open` configuration
+//!       mode. Can be used as an input in the `open` configuration
 //!
 //! ## Changing modes
 //! The simplest way to change the pin mode is to use the `into_<mode>` functions. These return a
@@ -56,13 +56,14 @@
 
 use core::marker::PhantomData;
 
+use crate::pac;
 pub mod alt;
 mod convert;
 pub use convert::PinMode;
 mod partially_erased;
 pub use partially_erased::{PEPin, PartiallyErasedPin};
 mod erased;
-pub use erased::{EPin, ErasedPin};
+pub use erased::{AnyPin, ErasedPin};
 mod exti;
 pub use exti::ExtiPin;
 mod dynamic;
@@ -115,7 +116,7 @@ pub struct Alternate<const A: u8, Otype = PushPull>(PhantomData<Otype>);
 pub struct Input;
 
 /// Pull setting for an input.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Pull {
     /// Floating
@@ -126,6 +127,16 @@ pub enum Pull {
     Down = 2,
 }
 
+impl From<Pull> for pac::gpioa::pupdr::PUPDR0 {
+    fn from(value: Pull) -> Self {
+        match value {
+            Pull::Down => Self::PullDown,
+            Pull::Up => Self::PullUp,
+            Pull::None => Self::Floating,
+        }
+    }
+}
+
 /// Open drain input or output (type state)
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -134,8 +145,8 @@ pub struct OpenDrain;
 /// Output mode (type state)
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Output<MODE = PushPull> {
-    _mode: PhantomData<MODE>,
+pub struct Output<Otype = PushPull> {
+    _mode: PhantomData<Otype>,
 }
 
 /// Push pull output (type state)
@@ -193,6 +204,17 @@ pub enum Speed {
     High = 2,
     /// Very high speed
     VeryHigh = 3,
+}
+
+impl From<Speed> for pac::gpioa::ospeedr::OSPEEDR0 {
+    fn from(value: Speed) -> Self {
+        match value {
+            Speed::Low => Self::LowSpeed,
+            Speed::Medium => Self::MediumSpeed,
+            Speed::High => Self::HighSpeed,
+            Speed::VeryHigh => Self::VeryHighSpeed,
+        }
+    }
 }
 
 /// GPIO interrupt trigger edge selection
@@ -318,13 +340,9 @@ where
 {
     /// Set pin speed
     pub fn set_speed(&mut self, speed: Speed) {
-        let offset = 2 * { N };
-
-        unsafe {
-            (*gpiox::<P>())
-                .ospeedr()
-                .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | ((speed as u32) << offset)));
-        }
+        unsafe { &(*gpiox::<P>()) }
+            .ospeedr()
+            .modify(|_, w| w.ospeedr(N).variant(speed.into()));
     }
 
     /// Set pin speed
@@ -350,13 +368,9 @@ where
 {
     /// Set the internal pull-up and pull-down resistor
     pub fn set_internal_resistor(&mut self, resistor: Pull) {
-        let offset = 2 * { N };
-        let value = resistor as u32;
-        unsafe {
-            (*gpiox::<P>())
-                .pupdr()
-                .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (value << offset)));
-        }
+        unsafe { &(*gpiox::<P>()) }
+            .pupdr()
+            .modify(|_, w| w.pupdr(N).variant(resistor.into()));
     }
 
     /// Set the internal pull-up and pull-down resistor
@@ -435,22 +449,26 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
     #[inline(always)]
     fn _set_high(&mut self) {
         // NOTE(unsafe) atomic write to a stateless register
-        unsafe { (*gpiox::<P>()).bsrr().write(|w| w.bits(1 << N)) }
+        let gpio = unsafe { &(*gpiox::<P>()) };
+        gpio.bsrr().write(|w| w.bs(N).set_bit());
     }
     #[inline(always)]
     fn _set_low(&mut self) {
         // NOTE(unsafe) atomic write to a stateless register
-        unsafe { (*gpiox::<P>()).bsrr().write(|w| w.bits(1 << (16 + N))) }
+        let gpio = unsafe { &(*gpiox::<P>()) };
+        gpio.bsrr().write(|w| w.br(N).set_bit());
     }
     #[inline(always)]
     fn _is_set_low(&self) -> bool {
         // NOTE(unsafe) atomic read with no side effects
-        unsafe { (*gpiox::<P>()).odr().read().bits() & (1 << N) == 0 }
+        let gpio = unsafe { &(*gpiox::<P>()) };
+        gpio.odr().read().odr(N).bit_is_clear()
     }
     #[inline(always)]
     fn _is_low(&self) -> bool {
         // NOTE(unsafe) atomic read with no side effects
-        unsafe { (*gpiox::<P>()).idr().read().bits() & (1 << N) == 0 }
+        let gpio = unsafe { &(*gpiox::<P>()) };
+        gpio.idr().read().idr(N).bit_is_clear()
     }
 }
 

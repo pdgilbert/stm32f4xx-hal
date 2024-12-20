@@ -1,6 +1,6 @@
 [package]
 edition = "2021"
-rust-version = "1.60"
+rust-version = "1.62"
 
 authors = ["Daniel Egger <daniel@eggers-club.de>"]
 categories = ["embedded", "hardware-support", "no-std"]
@@ -11,7 +11,7 @@ license = "0BSD"
 name = "stm32f4xx-hal"
 readme = "README.md"
 repository = "https://github.com/stm32-rs/stm32f4xx-hal"
-version = "0.21.0"
+version = "0.22.1"
 
 [package.metadata.docs.rs]
 features = [
@@ -38,6 +38,7 @@ synopsys-usb-otg = { version = "0.4.0", features = [
 ], optional = true }
 sdio-host = { version = "0.9.0", optional = true }
 embedded-dma = "0.2.0"
+embedded-display-controller = { version = "^0.2.0", optional = true }
 bare-metal = { version = "1" }
 void = { default-features = false, version = "1.0.2" }
 display-interface = { version = "0.5.0", optional = true }
@@ -56,17 +57,18 @@ embedded-hal-async = { version = "1.0", optional = true }
 rtic = { version = "2.0.1", features = ["thumbv7-backend"], optional = true }
 atomic-polyfill = { version = "1.0.3", optional = true }
 
+stm32-fmc = { version = "0.3.2", optional = true }
+
 enumflags2 = "0.7.8"
 embedded-storage = "0.3"
-vcell = "0.1.3"
 document-features = "0.2"
 
 micromath = { version = "2.1.0", optional = true }
 
 [dependencies.stm32f4]
 package = "stm32f4-staging"
-version = "0.16.0"
-features = ["defmt", "atomics"]
+version = "0.17.0"
+features = ["atomics"]
 
 [dependencies.time]
 version = "0.3.14"
@@ -82,6 +84,9 @@ version = "1.0"
 
 [dependencies.embedded-hal-nb]
 version = "1.0"
+
+[dependencies.embedded-io]
+version = "0.6.1"
 
 [dependencies.stm32_i2s_v12x]
 version = "0.5.0"
@@ -112,6 +117,7 @@ hd44780-driver = "0.4.0"
 display-interface = "0.5"
 display-interface-04 = { package = "display-interface", version = "0.4.1" }
 ft6x06 = "0.1.2"
+otm8009a = "0.1"
 ushell = "0.3.5"
 
 [dev-dependencies.time]
@@ -161,6 +167,7 @@ gpio-f401 = [
     "tim9",
     "tim10",
     "tim11",
+    "rcc_shared_m"
 ]
 gpio-f410 = [
     "dac",
@@ -224,6 +231,7 @@ gpio-f412 = [
     "tim13",
     "tim14",
     "usart3",
+    "rcc_i2s_apb",
 ]
 gpio-f413 = [
     "gpiod",
@@ -269,6 +277,7 @@ gpio-f413 = [
     "uart8",
     "uart9",
     "uart10",
+    "rcc_i2s_apb",
 ]
 gpio-f417 = [
     "gpiod",
@@ -307,6 +316,7 @@ gpio-f417 = [
     "usart3",
     "uart4",
     "uart5",
+    "rcc_shared_m"
 ]
 gpio-f427 = [
     "gpiod",
@@ -354,6 +364,7 @@ gpio-f427 = [
     "uart5",
     "uart7",
     "uart8",
+    "rcc_shared_m"
 ]
 gpio-f446 = [
     "gpiod",
@@ -395,6 +406,7 @@ gpio-f446 = [
     "usart3",
     "uart4",
     "uart5",
+    "rcc_i2s_apb",
 ]
 gpio-f469 = [
     "gpiod",
@@ -445,6 +457,7 @@ gpio-f469 = [
     "uart5",
     "uart7",
     "uart8",
+    "rcc_shared_m"
 ]
 
 ## Support monotonic timers and other stuff that can be used by [RTICv1 framework](https://crates.io/crates/cortex-m-rtic)
@@ -465,7 +478,7 @@ rtic-tim4 = []
 rtic-tim5 = []
 
 ## Implementation of `defmt::Format` for public enums and structures. See [defmt](https://crates.io/crates/defmt)
-defmt = ["dep:defmt", "fugit/defmt", "nb/defmt-0-3"]
+defmt = ["dep:defmt", "stm32f4/defmt", "fugit/defmt", "nb/defmt-0-3"]
 
 ## bxCAN peripheral support. See [bxcan](https://crates.io/crates/bxcan)
 can = ["dep:bxcan"]
@@ -484,8 +497,12 @@ fsmc_lcd = ["dep:display-interface", "dep:display-interface-04"]
 ## SDIO peripheral support. See [sdio-host](https://crates.io/crates/sdio-host)
 sdio-host = ["dep:sdio-host"]
 
+# Next features are for internal use only!!!
+
 dfsdm = []
 sai = []
+rcc_shared_m = []
+rcc_i2s_apb = []
 
 adc2 = []
 adc3 = []
@@ -499,7 +516,7 @@ dcmi = []
 dfsdm1 = ["dfsdm"]
 dfsdm2 = ["dfsdm"]
 dma2d = []
-dsihost = []
+dsihost = ["embedded-display-controller"]
 eth = []
 fmc = []
 fsmc = []
@@ -603,6 +620,10 @@ required-features = [
 ] # stm32f413
 
 [[example]]
+name = "f469disco-lcd-test"
+required-features = ["stm32f469", "defmt"]
+
+[[example]]
 name = "hd44780"
 required-features = []
 
@@ -676,7 +697,7 @@ required-features = ["tim2", "rtic1"]
 
 [[example]]
 name = "rtic2-tick"
-required-features = ["rtic2", "rtic-tim2"]
+required-features = ["rtic2", "rtic-tim3"]
 
 [[example]]
 name = "rtic-usart-shell"
@@ -689,6 +710,10 @@ required-features = ["stm32f411", "rtic1"] # stm32f411
 [[example]]
 name = "rtic-usb-cdc-echo"
 required-features = ["stm32f411", "rtic1", "otg-fs", "usb_fs"] # stm32f411
+
+[[example]]
+name = "sai-duplex"
+required-features = ["stm32f429"]
 
 [[example]]
 name = "sd"
@@ -753,3 +778,7 @@ required-features = ["otg-fs", "usb_fs"] # stm32f401
 [[example]]
 name = "ws2812-spi"
 required-features = []
+
+[[example]]
+name = "fmc-sdram"
+required-features = ["stm32f469", "stm32-fmc"]
